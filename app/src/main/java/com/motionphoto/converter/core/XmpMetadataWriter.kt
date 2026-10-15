@@ -1,9 +1,9 @@
 package com.motionphoto.converter.core
 
-import com.adobe.xmp.XMPException
-import com.adobe.xmp.XMPMeta
-import com.adobe.xmp.XMPMetaFactory
-import com.adobe.xmp.options.SerializeOptions
+import com.adobe.internal.xmp.XMPException
+import com.adobe.internal.xmp.XMPMeta
+import com.adobe.internal.xmp.XMPMetaFactory
+import com.adobe.internal.xmp.options.SerializeOptions
 import java.io.File
 import java.io.FileOutputStream
 

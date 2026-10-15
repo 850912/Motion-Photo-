@@ -232,6 +232,7 @@ private fun IdleScreen(onSelectVideo: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VideoPreviewScreen(
     videoUri: Uri,
