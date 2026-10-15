@@ -1,288 +1,306 @@
 package com.motionphoto.converter.core
 
-import com.adobe.internal.xmp.XMPException
-import com.adobe.internal.xmp.XMPMeta
 import com.adobe.internal.xmp.XMPMetaFactory
 import com.adobe.internal.xmp.options.SerializeOptions
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 
 /**
- * XMP 元数据写入工具 - 增强版
- * 支持多种格式：Google 标准、小米增强、华为兼容、通用格式
- * 确保在小米、OPPO、华为、vivo 等国产手机品牌上的最大兼容性
+ * Android Motion Photo 1.0 & 多品牌实况照片 XMP 元数据引擎
+ *
+ * 修复了旧版本的核心问题：
+ * 1. 使用标准 RDF Seq + parseType="Resource" 构建 Container:Directory，避免 setArrayItem 抛出 XMPException 或转义 XML 标签
+ * 2. 保留标准 <?xpacket begin="..." id="W5M0MpCehiHzreSzNTczkc9d"?> 包装头尾，确保系统相册与 ExifTool 正常识别
+ * 3. 智能解析 JPEG 标记段（SOI / APP0 / APP1 Exif），在保留相机 EXIF 信息的前提下注入 APP1 XMP 数据段
+ * 4. 精确写入与静态封面帧对齐的微秒级时间戳 MotionPhotoPresentationTimestampUs
  */
 object XmpMetadataWriter {
-    
-    // Google 标准命名空间
-    private const val NS_GCAMERA = "http://ns.google.com/photos/1.0/camera/"
-    private const val NS_CONTAINER = "http://ns.google.com/photos/1.0/container/"
-    private const val NS_CONTAINER_ITEM = "http://ns.google.com/photos/1.0/container/item/"
-    
-    // 小米 MicroVideo 命名空间（旧版兼容）
-    private const val NS_MICROVIDEO = "http://ns.google.com/photos/1.0/camera/"
-    
-    // 华为命名空间（基于逆向工程和社区研究）
-    private const val NS_HUAWEI = "http://www.huawei.com/camera/1.0/"
-    
-    private const val PREFIX_GCAMERA = "GCamera"
-    private const val PREFIX_CONTAINER = "Container"
-    private const val PREFIX_ITEM = "Item"
-    private const val PREFIX_HUAWEI = "HwCamera"
-    
+
+    const val NS_GCAMERA = "http://ns.google.com/photos/1.0/camera/"
+    const val NS_CONTAINER = "http://ns.google.com/photos/1.0/container/"
+    const val NS_CONTAINER_ITEM = "http://ns.google.com/photos/1.0/container/item/"
+    const val NS_OPCAMERA = "http://ns.oplus.com/photos/1.0/camera/"
+    const val NS_HWCAMERA = "http://www.huawei.com/camera/1.0/"
+
+    private const val XMP_HEADER_SIGNATURE = "http://ns.adobe.com/xap/1.0/\u0000"
+
     /**
-     * Google 标准格式 XMP（OPPO/部分小米适用）
+     * 生成符合指定厂商规范的完整 XMP 数据包（含 xpacket 头尾）
      */
-    fun createGoogleStandardXmp(
+    fun createXmpPacket(
+        format: MotionPhotoBuilder.OutputFormat,
         videoLength: Long,
+        presentationTimestampUs: Long,
         videoDurationMs: Long,
         videoMimeType: String = "video/mp4"
     ): String {
+        val safeTimestampUs = presentationTimestampUs.coerceAtLeast(0L)
+        val safeDurationMs = videoDurationMs.coerceAtLeast(100L)
+
+        val includeMicroVideo = format == MotionPhotoBuilder.OutputFormat.UNIVERSAL ||
+            format == MotionPhotoBuilder.OutputFormat.XIAOMI_ENHANCED
+        val includeOppo = format == MotionPhotoBuilder.OutputFormat.UNIVERSAL ||
+            format == MotionPhotoBuilder.OutputFormat.OPPO_OLIVE
+        val includeHuawei = format == MotionPhotoBuilder.OutputFormat.UNIVERSAL ||
+            format == MotionPhotoBuilder.OutputFormat.HUAWEI_COMPATIBLE
+
+        val rawRdfXml = buildRdfXml(
+            videoLength = videoLength,
+            presentationTimestampUs = safeTimestampUs,
+            videoDurationMs = safeDurationMs,
+            videoMimeType = videoMimeType,
+            includeMicroVideo = includeMicroVideo,
+            includeOppo = includeOppo,
+            includeHuawei = includeHuawei
+        )
+
         return try {
-            val xmp = XMPMetaFactory.create()
-            
             registerNamespaces()
-            
-            // Camera XMP - 标识 Motion Photo
-            xmp.setProperty(NS_GCAMERA, "GCamera:MotionPhoto", "1")
-            xmp.setProperty(NS_GCAMERA, "GCamera:MotionPhotoVersion", "1")
-            xmp.setPropertyLong(NS_GCAMERA, "GCamera:MotionPhotoPresentationTimestampUs", videoDurationMs * 1000)
-            
-            // Container XMP - 描述文件结构
-            addContainerDirectory(xmp, videoLength, videoMimeType)
-            
-            serializeXmp(xmp)
-        } catch (e: XMPException) {
-            throw RuntimeException("Failed to create Google standard XMP", e)
+            val xmpMeta = XMPMetaFactory.parseFromString(rawRdfXml)
+            val options = SerializeOptions().apply {
+                omitPacketWrapper = false
+                useCompactFormat = true
+                indent = "  "
+                padding = 64
+            }
+            XMPMetaFactory.serializeToString(xmpMeta, options)
+        } catch (_: Exception) {
+            wrapWithXPacket(rawRdfXml)
         }
     }
-    
+
     /**
-     * 小米增强格式 XMP（同时包含 MicroVideo 和 MotionPhoto 标签）
-     */
-    fun createXiaomiEnhancedXmp(
-        videoLength: Long,
-        videoDurationMs: Long,
-        videoMimeType: String = "video/mp4"
-    ): String {
-        return try {
-            val xmp = XMPMetaFactory.create()
-            
-            registerNamespaces()
-            
-            // GCamera namespace - MotionPhoto 标识
-            xmp.setProperty(NS_GCAMERA, "GCamera:MotionPhoto", "1")
-            xmp.setProperty(NS_GCAMERA, "GCamera:MotionPhotoVersion", "1")
-            xmp.setPropertyLong(NS_GCAMERA, "GCamera:MotionPhotoPresentationTimestampUs", videoDurationMs * 1000)
-            
-            // MicroVideo 标识（小米旧版兼容）
-            xmp.setProperty(NS_GCAMERA, "GCamera:MicroVideo", "1")
-            xmp.setProperty(NS_GCAMERA, "GCamera:MicroVideoVersion", "1")
-            xmp.setPropertyLong(NS_GCAMERA, "GCamera:MicroVideoOffset", videoLength)
-            xmp.setPropertyLong(NS_GCAMERA, "GCamera:MicroVideoPresentationTimestampUs", videoDurationMs * 1000)
-            
-            // Container XMP
-            addContainerDirectory(xmp, videoLength, videoMimeType)
-            
-            serializeXmp(xmp)
-        } catch (e: XMPException) {
-            throw RuntimeException("Failed to create Xiaomi enhanced XMP", e)
-        }
-    }
-    
-    /**
-     * 华为兼容格式 XMP（基于华为相册识别规则）
-     */
-    fun createHuaweiCompatibleXmp(
-        videoLength: Long,
-        videoDurationMs: Long,
-        videoMimeType: String = "video/mp4"
-    ): String {
-        return try {
-            val xmp = XMPMetaFactory.create()
-            
-            registerNamespaces()
-            XMPMetaFactory.getSchemaRegistry().registerNamespace(NS_HUAWEI, PREFIX_HUAWEI)
-            
-            // Google 标准元数据（基础兼容）
-            xmp.setProperty(NS_GCAMERA, "GCamera:MotionPhoto", "1")
-            xmp.setProperty(NS_GCAMERA, "GCamera:MotionPhotoVersion", "1")
-            xmp.setPropertyLong(NS_GCAMERA, "GCamera:MotionPhotoPresentationTimestampUs", videoDurationMs * 1000)
-            
-            // 华为特定标识
-            xmp.setProperty(NS_HUAWEI, "HwCamera:LivePhoto", "1")
-            xmp.setPropertyLong(NS_HUAWEI, "HwCamera:VideoOffset", videoLength)
-            xmp.setPropertyLong(NS_HUAWEI, "HwCamera:VideoDuration", videoDurationMs)
-            
-            // Container XMP
-            addContainerDirectory(xmp, videoLength, videoMimeType)
-            
-            serializeXmp(xmp)
-        } catch (e: XMPException) {
-            throw RuntimeException("Failed to create Huawei compatible XMP", e)
-        }
-    }
-    
-    /**
-     * 通用格式 XMP（包含所有厂商的元数据标识）
-     * 推荐使用此格式，兼容性最好
+     * 兼容旧接口调用
      */
     fun createUniversalXmp(
         videoLength: Long,
         videoDurationMs: Long,
-        videoMimeType: String = "video/mp4"
-    ): String {
-        return try {
-            val xmp = XMPMetaFactory.create()
-            
-            registerNamespaces()
-            XMPMetaFactory.getSchemaRegistry().registerNamespace(NS_HUAWEI, PREFIX_HUAWEI)
-            
-            // Google MotionPhoto 标准（OPPO/小米/Google Photos）
-            xmp.setProperty(NS_GCAMERA, "GCamera:MotionPhoto", "1")
-            xmp.setProperty(NS_GCAMERA, "GCamera:MotionPhotoVersion", "1")
-            xmp.setPropertyLong(NS_GCAMERA, "GCamera:MotionPhotoPresentationTimestampUs", videoDurationMs * 1000)
-            
-            // 小米 MicroVideo 兼容
-            xmp.setProperty(NS_GCAMERA, "GCamera:MicroVideo", "1")
-            xmp.setProperty(NS_GCAMERA, "GCamera:MicroVideoVersion", "1")
-            xmp.setPropertyLong(NS_GCAMERA, "GCamera:MicroVideoOffset", videoLength)
-            xmp.setPropertyLong(NS_GCAMERA, "GCamera:MicroVideoPresentationTimestampUs", videoDurationMs * 1000)
-            
-            // 华为 LivePhoto 兼容
-            xmp.setProperty(NS_HUAWEI, "HwCamera:LivePhoto", "1")
-            xmp.setPropertyLong(NS_HUAWEI, "HwCamera:VideoOffset", videoLength)
-            xmp.setPropertyLong(NS_HUAWEI, "HwCamera:VideoDuration", videoDurationMs)
-            
-            // Container XMP（标准容器结构）
-            addContainerDirectory(xmp, videoLength, videoMimeType)
-            
-            serializeXmp(xmp)
-        } catch (e: XMPException) {
-            throw RuntimeException("Failed to create universal XMP", e)
-        }
-    }
-    
-    /**
-     * 注册所有需要的命名空间
-     */
+        videoMimeType: String = "video/mp4",
+        presentationTimestampUs: Long = 0L
+    ): String = createXmpPacket(
+        format = MotionPhotoBuilder.OutputFormat.UNIVERSAL,
+        videoLength = videoLength,
+        presentationTimestampUs = presentationTimestampUs,
+        videoDurationMs = videoDurationMs,
+        videoMimeType = videoMimeType
+    )
+
     private fun registerNamespaces() {
-        val registry = XMPMetaFactory.getSchemaRegistry()
         try {
-            registry.registerNamespace(NS_GCAMERA, PREFIX_GCAMERA)
-            registry.registerNamespace(NS_CONTAINER, PREFIX_CONTAINER)
-            registry.registerNamespace(NS_CONTAINER_ITEM, PREFIX_ITEM)
-        } catch (e: Exception) {
-            // 命名空间可能已注册，忽略错误
+            val registry = XMPMetaFactory.getSchemaRegistry()
+            registry.registerNamespace(NS_GCAMERA, "GCamera")
+            registry.registerNamespace(NS_CONTAINER, "Container")
+            registry.registerNamespace(NS_CONTAINER_ITEM, "Item")
+            registry.registerNamespace(NS_OPCAMERA, "OpCamera")
+            registry.registerNamespace(NS_HWCAMERA, "HwCamera")
+        } catch (_: Exception) {
+            // 忽略重复注册异常
         }
     }
-    
-    /**
-     * 添加 Container Directory（Google 标准容器结构）
-     */
-    private fun addContainerDirectory(xmp: XMPMeta, videoLength: Long, videoMimeType: String) {
-        // Item 1: 主 JPEG 图片
-        xmp.setArrayItem(NS_CONTAINER, "Container:Directory", 1, createItemXmp(
-            mime = "image/jpeg",
-            semantic = "Primary",
-            length = 0,
-            padding = 0
-        ))
-        
-        // Item 2: 嵌入的视频
-        xmp.setArrayItem(NS_CONTAINER, "Container:Directory", 2, createItemXmp(
-            mime = videoMimeType,
-            semantic = "MotionPhoto",
-            length = videoLength,
-            padding = 0
-        ))
-    }
-    
-    /**
-     * 创建 Container Item 描述
-     */
-    private fun createItemXmp(
-        mime: String,
-        semantic: String,
-        length: Long,
-        padding: Int
-    ): String {
-        return buildString {
-            append("<rdf:Description")
-            append(" Item:Mime=\"$mime\"")
-            append(" Item:Semantic=\"$semantic\"")
-            if (length > 0) {
-                append(" Item:Length=\"$length\"")
-            }
-            if (padding > 0) {
-                append(" Item:Padding=\"$padding\"")
-            }
-            append("/>")
+
+    private fun buildRdfXml(
+        videoLength: Long,
+        presentationTimestampUs: Long,
+        videoDurationMs: Long,
+        videoMimeType: String,
+        includeMicroVideo: Boolean,
+        includeOppo: Boolean,
+        includeHuawei: Boolean
+    ): String = buildString {
+        append("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Adobe XMP Core 6.1.11\">\n")
+        append("  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n")
+        append("    <rdf:Description rdf:about=\"\"\n")
+        append("        xmlns:GCamera=\"$NS_GCAMERA\"\n")
+        append("        xmlns:Camera=\"$NS_GCAMERA\"\n")
+        append("        xmlns:Container=\"$NS_CONTAINER\"\n")
+        append("        xmlns:Item=\"$NS_CONTAINER_ITEM\"")
+        if (includeOppo) {
+            append("\n        xmlns:OpCamera=\"$NS_OPCAMERA\"")
         }
-    }
-    
-    /**
-     * 序列化 XMP 元数据
-     */
-    private fun serializeXmp(xmp: XMPMeta): String {
-        val options = SerializeOptions().apply {
-            omitPacketWrapper = true
-            useCompactFormat = false  // 使用更宽松的格式，兼容性更好
-            indent = "  "
+        if (includeHuawei) {
+            append("\n        xmlns:HwCamera=\"$NS_HWCAMERA\"")
         }
-        return XMPMetaFactory.serializeToString(xmp, options)
+        // Google Motion Photo 1.0 标准属性
+        append("\n        GCamera:MotionPhoto=\"1\"")
+        append("\n        GCamera:MotionPhotoVersion=\"1\"")
+        append("\n        GCamera:MotionPhotoPresentationTimestampUs=\"$presentationTimestampUs\"")
+
+        // 小米 / 旧版 Google 相册 MicroVideo 兼容属性
+        if (includeMicroVideo) {
+            append("\n        GCamera:MicroVideo=\"1\"")
+            append("\n        GCamera:MicroVideoVersion=\"1\"")
+            append("\n        GCamera:MicroVideoOffset=\"$videoLength\"")
+            append("\n        GCamera:MicroVideoPresentationTimestampUs=\"$presentationTimestampUs\"")
+        }
+
+        // OPPO / OnePlus / Realme O-Live Photo 扩展属性
+        if (includeOppo) {
+            append("\n        OpCamera:MotionPhotoOwner=\"oplus\"")
+            append("\n        OpCamera:OLivePhotoVersion=\"2\"")
+            append("\n        OpCamera:MotionPhotoPrimaryPresentationTimestampUs=\"$presentationTimestampUs\"")
+            append("\n        OpCamera:VideoLength=\"$videoLength\"")
+        }
+
+        // 华为 / 荣耀实况照片兼容属性
+        if (includeHuawei) {
+            append("\n        HwCamera:LivePhoto=\"1\"")
+            append("\n        HwCamera:VideoOffset=\"$videoLength\"")
+            append("\n        HwCamera:VideoDuration=\"$videoDurationMs\"")
+        }
+        append(">\n")
+
+        // Google 标准 Container:Directory 结构
+        append("      <Container:Directory>\n")
+        append("        <rdf:Seq>\n")
+        append("          <rdf:li rdf:parseType=\"Resource\">\n")
+        append("            <Container:Item\n")
+        append("                Item:Mime=\"image/jpeg\"\n")
+        append("                Item:Semantic=\"Primary\"\n")
+        append("                Item:Length=\"0\"\n")
+        append("                Item:Padding=\"0\"/>\n")
+        append("          </rdf:li>\n")
+        append("          <rdf:li rdf:parseType=\"Resource\">\n")
+        append("            <Container:Item\n")
+        append("                Item:Mime=\"$videoMimeType\"\n")
+        append("                Item:Semantic=\"MotionPhoto\"\n")
+        append("                Item:Length=\"$videoLength\"\n")
+        append("                Item:Padding=\"0\"/>\n")
+        append("          </rdf:li>\n")
+        append("        </rdf:Seq>\n")
+        append("      </Container:Directory>\n")
+        append("    </rdf:Description>\n")
+        append("  </rdf:RDF>\n")
+        append("</x:xmpmeta>")
     }
-    
+
+    private fun wrapWithXPacket(rdfXml: String): String {
+        return "<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n" +
+            rdfXml +
+            "\n<?xpacket end=\"w\"?>"
+    }
+
     /**
-     * 将 XMP 元数据注入到 JPEG 文件中
-     * JPEG 文件结构: SOI(FFD8) -> APP1(XMP) -> ... -> EOI(FFD9)
+     * 将 XMP 元数据无损注入到 JPEG 文件中，保留原有的 APP0 (JFIF) 与 APP1 (Exif) 段，
+     * 并自动移除已存在的旧 XMP APP1 段，避免重复冲突。
      */
     fun injectXmpIntoJpeg(inputFile: File, xmpString: String, outputFile: File) {
-        val xmpBytes = buildXmpSegment(xmpString)
-        
-        inputFile.inputStream().use { input ->
-            FileOutputStream(outputFile).use { output ->
-                // 读取 JPEG SOI marker (0xFF 0xD8)
-                val soi = ByteArray(2)
-                input.read(soi)
-                if (soi[0] != 0xFF.toByte() || soi[1] != 0xD8.toByte()) {
-                    throw IllegalArgumentException("Not a valid JPEG file")
+        val xmpApp1Segment = buildXmpApp1Segment(xmpString)
+        val inputBytes = FileInputStream(inputFile).use { it.readBytes() }
+
+        if (inputBytes.size < 4 ||
+            inputBytes[0] != 0xFF.toByte() ||
+            inputBytes[1] != 0xD8.toByte()
+        ) {
+            throw IllegalArgumentException("输入文件不是有效的 JPEG 图像")
+        }
+
+        val outBuffer = ByteArrayOutputStream(inputBytes.size + xmpApp1Segment.size)
+        // 1. 写入 JPEG SOI (0xFFD8)
+        outBuffer.write(inputBytes, 0, 2)
+
+        var pos = 2
+        var xmpWritten = false
+        val xmpHeaderBytes = XMP_HEADER_SIGNATURE.toByteArray(Charsets.UTF_8)
+
+        // 2. 遍历 JPEG 头部标记段，保留 JFIF (FFE0) 和 Exif (FFE1)，并在它们之后插入 XMP (FFE1)
+        while (pos + 4 <= inputBytes.size) {
+            if (inputBytes[pos] != 0xFF.toByte()) {
+                break
+            }
+            val marker = inputBytes[pos + 1].toInt() and 0xFF
+
+            // 遇到 SOS (0xDA) 或 EOI (0xD9)，说明头部元数据段结束
+            if (marker == 0xDA || marker == 0xD9) {
+                if (!xmpWritten) {
+                    outBuffer.write(xmpApp1Segment)
+                    xmpWritten = true
                 }
-                
-                // 写入 SOI
-                output.write(soi)
-                
-                // 写入 XMP APP1 segment
-                output.write(xmpBytes)
-                
-                // 复制剩余的 JPEG 数据
-                input.copyTo(output)
+                break
+            }
+
+            // 独立无长度标记 (RSTn, SOI, TEM)
+            if (marker == 0xD8 || marker == 0x01 || (marker in 0xD0..0xD7)) {
+                outBuffer.write(inputBytes, pos, 2)
+                pos += 2
+                continue
+            }
+
+            val segLength = ((inputBytes[pos + 2].toInt() and 0xFF) shl 8) or
+                (inputBytes[pos + 3].toInt() and 0xFF)
+            if (segLength < 2 || pos + 2 + segLength > inputBytes.size) {
+                break
+            }
+
+            val totalSegBytes = 2 + segLength
+
+            // 如果是 APP0 (0xE0) 或非 XMP 的 APP1 (0xE1 Exif)，先保留写入
+            if (marker == 0xE0 || marker == 0xE1) {
+                val isOldXmp = marker == 0xE1 && isXmpPayload(inputBytes, pos + 4, segLength - 2, xmpHeaderBytes)
+                if (!isOldXmp) {
+                    outBuffer.write(inputBytes, pos, totalSegBytes)
+                }
+                pos += totalSegBytes
+            } else {
+                // 在进入 DQT/SOF 等图像核心段之前写入 XMP APP1 段
+                if (!xmpWritten) {
+                    outBuffer.write(xmpApp1Segment)
+                    xmpWritten = true
+                }
+                outBuffer.write(inputBytes, pos, totalSegBytes)
+                pos += totalSegBytes
             }
         }
-    }
-    
-    /**
-     * 构建 JPEG APP1 XMP segment
-     * 格式: FF E1 [length:2] [XMP header] [XMP data]
-     */
-    private fun buildXmpSegment(xmpString: String): ByteArray {
-        val xmpHeader = "http://ns.adobe.com/xap/1.0/\u0000"
-        val xmpData = xmpHeader.toByteArray(Charsets.UTF_8) + xmpString.toByteArray(Charsets.UTF_8)
-        
-        // APP1 marker (0xFF 0xE1)
-        val marker = byteArrayOf(0xFF.toByte(), 0xE1.toByte())
-        
-        // Length (2 bytes, big-endian, includes length field itself)
-        val length = xmpData.size + 2
-        if (length > 65535) {
-            throw IllegalArgumentException("XMP data too large: $length bytes")
+
+        if (!xmpWritten) {
+            outBuffer.write(xmpApp1Segment)
         }
-        
-        val lengthBytes = byteArrayOf(
-            (length shr 8).toByte(),
-            (length and 0xFF).toByte()
-        )
-        
-        return marker + lengthBytes + xmpData
+
+        // 3. 写入剩余的 JPEG 扫描流数据
+        if (pos < inputBytes.size) {
+            outBuffer.write(inputBytes, pos, inputBytes.size - pos)
+        }
+
+        FileOutputStream(outputFile).use { out ->
+            outBuffer.writeTo(out)
+        }
+    }
+
+    private fun isXmpPayload(
+        bytes: ByteArray,
+        payloadStart: Int,
+        payloadLength: Int,
+        xmpHeader: ByteArray
+    ): Boolean {
+        if (payloadLength < xmpHeader.size) return false
+        for (i in xmpHeader.indices) {
+            if (bytes[payloadStart + i] != xmpHeader[i]) return false
+        }
+        return true
+    }
+
+    /**
+     * 构建标准 JPEG APP1 XMP 段：0xFF 0xE1 + [2字节大端长度] + "http://ns.adobe.com/xap/1.0/\0" + XMP UTF-8 内容
+     */
+    private fun buildXmpApp1Segment(xmpString: String): ByteArray {
+        val headerBytes = XMP_HEADER_SIGNATURE.toByteArray(Charsets.UTF_8)
+        val payloadBytes = xmpString.toByteArray(Charsets.UTF_8)
+        val totalPayloadSize = headerBytes.size + payloadBytes.size
+        val segmentLength = totalPayloadSize + 2
+
+        if (segmentLength > 65535) {
+            throw IllegalArgumentException("XMP 数据段超出 JPEG APP1 64KB 限制 ($segmentLength bytes)")
+        }
+
+        val result = ByteArray(2 + segmentLength)
+        result[0] = 0xFF.toByte()
+        result[1] = 0xE1.toByte()
+        result[2] = ((segmentLength shr 8) and 0xFF).toByte()
+        result[3] = (segmentLength and 0xFF).toByte()
+        System.arraycopy(headerBytes, 0, result, 4, headerBytes.size)
+        System.arraycopy(payloadBytes, 0, result, 4 + headerBytes.size, payloadBytes.size)
+        return result
     }
 }
