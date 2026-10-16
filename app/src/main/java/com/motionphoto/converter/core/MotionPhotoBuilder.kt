@@ -3,6 +3,13 @@ package com.motionphoto.converter.core
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -24,16 +31,17 @@ import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
 
 /**
- * 工业级 Android Motion Photo 合成引擎 (v2.0 MD3E)
+ * 工业级 Android Motion Photo 合成引擎 (v3.0 Release · 开源生态融合版)
  *
- * 核心升级：
- * 1. 支持任意时间点封面帧提取 + 时间轴多帧胶片缩略图生成
- * 2. 支持视频片段裁剪 (trimStartMs .. trimEndMs) 与原声保留/静音切换
- * 3. 自动读取并写入视频旋转角度 (setOrientationHint) 与单调递增时间戳保护，彻底解决竖屏视频变形与 MediaMuxer 崩溃
- * 4. 自动写入相机 EXIF 标签 (Make/Model/DateTimeOriginal/Width/Height)，解决国产手机系统相册不识别问题
- * 5. 自动遵循 *MP.jpg 命名规范并通过 MediaStore 写入系统相册 (DCIM/Camera)，转换后立即可在系统相册与 Google Photos 查看
+ * 新增开源标杆特性 (参考 PetrVys/MotionPhoto2, googleinterns/libmphoto, wszqkzqk/live-photo-conv)：
+ * 1. 图影混流合成 (Photo + Video Muxer)：支持任选外部高清静态图片 (JPG/PNG/HEIC) 与视频流合成为实况照片
+ * 2. 本机样张 EXIF 克隆 (copy-img-meta)：支持从任意本机相机实拍照片克隆 25+ 项 EXIF 相机与镜头参数
+ * 3. 动态长曝光封面合成 (--long-exposure)：支持多帧丝滑慢门均值堆栈与夜晚流光峰值叠加生成静态主图
+ * 4. 封面视觉滤镜与电影感机型水印：支持原片/鲜明/暖调胶片/黑白滤镜及底部光学参数铭牌水印
+ * 5. 三星 OneUI (Galaxy S25 Ultra) 兼容协议与批量队列合成支持
  */
 class MotionPhotoBuilder(private val context: Context) {
 
@@ -59,15 +67,17 @@ class MotionPhotoBuilder(private val context: Context) {
         val description: String,
         val makeTag: String,
         val modelTag: String,
+        val lensTag: String,
         val filePrefix: String
     ) {
         UNIVERSAL(
             displayName = "全品牌通用格式",
             badge = "推荐 · 全兼容",
-            subtitle = "Google / 小米 / OPPO / vivo / 华为",
+            subtitle = "Google / 小米 / OPPO / vivo / 华为 / 三星",
             description = "同时注入 MotionPhoto 1.0 容器目录、MicroVideo 偏移量与 O-Live 多重元数据",
             makeTag = Build.MANUFACTURER.ifBlank { "Google" },
             modelTag = Build.MODEL.ifBlank { "Pixel 9 Pro" },
+            lensTag = "24mm f/1.68 OIS",
             filePrefix = "MVIMG"
         ),
         GOOGLE_STANDARD(
@@ -76,25 +86,28 @@ class MotionPhotoBuilder(private val context: Context) {
             subtitle = "Google 相册 / Pixel / 原生 Android",
             description = "严格遵循 Android Motion Photo 1.0 官方规范 (PXL_*MP.jpg)",
             makeTag = "Google",
-            modelTag = "Pixel 9 Pro",
+            modelTag = "Pixel 9 Pro XL",
+            lensTag = "Pixel 50MP Octa PD 24mm f/1.68",
             filePrefix = "PXL"
         ),
         XIAOMI_ENHANCED(
             displayName = "小米澎湃 HyperOS",
-            badge = "小米 / Redmi",
+            badge = "小米 / Leica",
             subtitle = "小米相册长按动态播放优化",
-            description = "注入 GCamera:MicroVideo + MotionPhoto 双标签及小米相机 EXIF 标识",
+            description = "注入 GCamera:MicroVideo + MotionPhoto 双标签及小米徕卡相机 EXIF 标识",
             makeTag = "Xiaomi",
-            modelTag = "Xiaomi 15 Pro",
+            modelTag = "Xiaomi 15 Ultra",
+            lensTag = "LEICA VARIO-SUMMILUX 1:1.63-2.5/14-100 ASPH.",
             filePrefix = "MVIMG"
         ),
         OPPO_OLIVE(
             displayName = "OPPO / 一加 O-Live",
-            badge = "ColorOS / 氧OS",
+            badge = "ColorOS / 哈苏",
             subtitle = "OPPO / OnePlus / Realme 相册实况",
             description = "包含 OpCamera O-Live Photo v2 专有命名空间与双时间戳同步",
             makeTag = "OPPO",
             modelTag = "OPPO Find X8 Pro",
+            lensTag = "Hasselblad 23mm f/1.6 OIS",
             filePrefix = "IMG"
         ),
         HUAWEI_COMPATIBLE(
@@ -104,8 +117,43 @@ class MotionPhotoBuilder(private val context: Context) {
             description = "包含 HwCamera:LivePhoto 偏移量及标准 Container 目录描述",
             makeTag = "HUAWEI",
             modelTag = "HUAWEI Pura 70 Ultra",
+            lensTag = "XMAGE Ultra Lighting 22.5mm f/1.6",
             filePrefix = "IMG"
+        ),
+        SAMSUNG_ONEUI(
+            displayName = "三星 OneUI 动态照片",
+            badge = "Galaxy S25 Ultra",
+            subtitle = "三星相册与 Google Photos 兼容",
+            description = "注入三星相机 EXIF 标识与标准 MotionPhoto 容器结构",
+            makeTag = "samsung",
+            modelTag = "SM-S938B",
+            lensTag = "Galaxy 200MP Adaptive Pixel 23mm f/1.7",
+            filePrefix = "MotionPhoto"
         )
+    }
+
+    /**
+     * 动态长曝光堆栈模式 (参考 wszqkzqk/live-photo-conv --long-exposure)
+     */
+    enum class LongExposureMode(
+        val title: String,
+        val subtitle: String
+    ) {
+        NONE("单帧清晰定格", "提取指定微秒处的高清单帧"),
+        SILKY_BLUR("丝滑慢门长曝光", "融合多帧均值，适合流水、云雾与车流虚化"),
+        LIGHT_TRAIL("流光星轨叠加", "多帧峰值高光叠加，适合夜景车灯与烟花轨迹")
+    }
+
+    /**
+     * 静态封面帧调色滤镜
+     */
+    enum class CoverFilter(
+        val title: String
+    ) {
+        ORIGINAL("原色直出"),
+        VIVID("鲜明流光"),
+        WARM_FILM("胶片暖调"),
+        MONOCHROME("经典黑白")
     }
 
     data class ConversionConfig(
@@ -115,6 +163,11 @@ class MotionPhotoBuilder(private val context: Context) {
         val includeAudio: Boolean = true,
         val jpegQuality: Int = 95,
         val format: OutputFormat = OutputFormat.UNIVERSAL,
+        val customCoverImageUri: Uri? = null,
+        val referenceExifImageUri: Uri? = null,
+        val longExposureMode: LongExposureMode = LongExposureMode.NONE,
+        val coverFilter: CoverFilter = CoverFilter.ORIGINAL,
+        val watermarkEnabled: Boolean = false,
         val saveToSystemGallery: Boolean = true
     )
 
@@ -147,12 +200,12 @@ class MotionPhotoBuilder(private val context: Context) {
         val totalSizeBytes: Long,
         val coverTimestampUs: Long,
         val videoDurationMs: Long,
-        val resolution: String
+        val resolution: String,
+        val usedCustomCover: Boolean = false,
+        val clonedReferenceExif: Boolean = false,
+        val longExposureMode: LongExposureMode = LongExposureMode.NONE
     )
 
-    /**
-     * 读取视频详细元数据
-     */
     suspend fun inspectVideoMetadata(videoUri: Uri): VideoMetadata = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
         try {
@@ -194,9 +247,6 @@ class MotionPhotoBuilder(private val context: Context) {
         }
     }
 
-    /**
-     * 提取视频时间轴缩略图序列（用于封面选择器胶片条）
-     */
     suspend fun extractTimelineThumbnails(
         videoUri: Uri,
         durationMs: Long,
@@ -233,23 +283,43 @@ class MotionPhotoBuilder(private val context: Context) {
         thumbnails
     }
 
-    /**
-     * 提取指定微秒时间点的预览封面帧
-     */
-    suspend fun extractPreviewFrame(videoUri: Uri, timeUs: Long): Bitmap? = withContext(Dispatchers.IO) {
+    suspend fun extractPreviewFrame(
+        videoUri: Uri,
+        timeUs: Long,
+        filter: CoverFilter = CoverFilter.ORIGINAL,
+        longExposureMode: LongExposureMode = LongExposureMode.NONE,
+        trimStartMs: Long = 0L,
+        trimEndMs: Long = 3000L
+    ): Bitmap? = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(context, videoUri)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                retriever.getScaledFrameAtTime(
-                    timeUs.coerceAtLeast(0L),
-                    MediaMetadataRetriever.OPTION_CLOSEST,
-                    960,
-                    960
-                ) ?: retriever.getFrameAtTime(timeUs.coerceAtLeast(0L), MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            val baseBitmap = if (longExposureMode != LongExposureMode.NONE) {
+                synthesizeLongExposureBitmap(
+                    retriever = retriever,
+                    startUs = trimStartMs * 1000L,
+                    endUs = trimEndMs * 1000L,
+                    mode = longExposureMode,
+                    targetMaxDim = 960
+                )
             } else {
-                retriever.getFrameAtTime(timeUs.coerceAtLeast(0L), MediaMetadataRetriever.OPTION_CLOSEST)
-                    ?: retriever.getFrameAtTime(timeUs.coerceAtLeast(0L), MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    retriever.getScaledFrameAtTime(
+                        timeUs.coerceAtLeast(0L),
+                        MediaMetadataRetriever.OPTION_CLOSEST,
+                        960,
+                        960
+                    ) ?: retriever.getFrameAtTime(timeUs.coerceAtLeast(0L), MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                } else {
+                    retriever.getFrameAtTime(timeUs.coerceAtLeast(0L), MediaMetadataRetriever.OPTION_CLOSEST)
+                        ?: retriever.getFrameAtTime(timeUs.coerceAtLeast(0L), MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                }
+            } ?: return@withContext null
+
+            if (filter == CoverFilter.ORIGINAL) {
+                baseBitmap
+            } else {
+                applyFilterAndWatermark(baseBitmap, filter, false, OutputFormat.UNIVERSAL)
             }
         } catch (_: Exception) {
             null
@@ -261,7 +331,7 @@ class MotionPhotoBuilder(private val context: Context) {
     }
 
     /**
-     * 核心合成流程：将源视频转换为标准 Android Motion Photo 并同步保存到系统相册
+     * 核心合成流程：支持「单视频转实况」「外部高清照片+视频混流」「长曝光流光封面」「样张 EXIF 克隆」
      */
     suspend fun convertVideoToMotionPhoto(
         videoUri: Uri,
@@ -282,26 +352,32 @@ class MotionPhotoBuilder(private val context: Context) {
             }
             val trimmedDurationMs = (actualTrimEndMs - actualTrimStartMs).coerceAtLeast(100L)
 
-            // 1. 提取高清静态封面帧并写入相机 EXIF 元数据
+            // 1. 生成主静态图像 (外部自定义照片 / 长曝光多帧合成 / 视频单帧提取)
+            val frameStageDesc = when {
+                config.customCoverImageUri != null -> "正在编码外部高清自定义封面图并写入 EXIF..."
+                config.longExposureMode != LongExposureMode.NONE -> "正在进行多帧堆栈合成 (${config.longExposureMode.title})..."
+                else -> "正在提取 ${(config.frameTimeUs / 1000L)}ms 处的高清静态封面帧..."
+            }
             onProgress?.invoke(
                 ConversionProgress(
                     ConversionProgress.Stage.EXTRACTING_FRAME,
-                    0.15f,
-                    "正在提取 ${(config.frameTimeUs / 1000L)}ms 处的高清静态封面帧..."
+                    0.18f,
+                    frameStageDesc
                 )
             )
-            frameFile = extractFrameAsJpegWithExif(
+
+            frameFile = preparePrimaryJpegWithExif(
                 videoUri = videoUri,
-                timeUs = config.frameTimeUs,
-                quality = config.jpegQuality.coerceIn(70, 100),
-                format = config.format
+                config = config,
+                trimStartUs = actualTrimStartMs * 1000L,
+                trimEndUs = actualTrimEndMs * 1000L
             )
 
             // 2. 无损重封装并裁剪 MP4 视频流
             onProgress?.invoke(
                 ConversionProgress(
                     ConversionProgress.Stage.EXTRACTING_VIDEO,
-                    0.42f,
+                    0.45f,
                     "正在无损封装动态视频流 (${trimmedDurationMs}ms)..."
                 )
             )
@@ -313,15 +389,15 @@ class MotionPhotoBuilder(private val context: Context) {
                 rotationDegrees = videoMetadata.rotationDegrees
             )
 
-            // 3. 计算封面帧在裁剪后视频中的相对时间戳并注入 XMP 元数据
+            // 3. 计算封面帧相对微秒时间戳并注入标准 XMP
             val relativePresentationUs = (config.frameTimeUs - actualTrimStartMs * 1000L)
                 .coerceIn(0L, trimmedDurationMs * 1000L)
 
             onProgress?.invoke(
                 ConversionProgress(
                     ConversionProgress.Stage.WRITING_METADATA,
-                    0.70f,
-                    "正在写入 ${config.format.displayName} XMP 容器目录..."
+                    0.72f,
+                    "正在注入 ${config.format.displayName} XMP 容器目录..."
                 )
             )
             val xmpPacket = XmpMetadataWriter.createXmpPacket(
@@ -337,11 +413,11 @@ class MotionPhotoBuilder(private val context: Context) {
             val jpegPortionLength = jpegWithXmp.length()
             val videoPortionLength = videoFile.length()
 
-            // 4. 合并主静态图像与尾部 MP4 视频流（生成符合 *MP.jpg 规范的文件名）
+            // 4. 合并主静态图像与尾部 MP4 视频流
             onProgress?.invoke(
                 ConversionProgress(
                     ConversionProgress.Stage.COMBINING,
-                    0.85f,
+                    0.86f,
                     "正在紧密拼接 JPEG 主图像与 MP4 媒体轨..."
                 )
             )
@@ -352,14 +428,14 @@ class MotionPhotoBuilder(private val context: Context) {
             val finalLocalFile = File(appOutputDir, fileName)
             combineJpegAndVideo(jpegWithXmp, videoFile, finalLocalFile)
 
-            // 5. 写入系统相册 MediaStore (DCIM/Camera) 以便系统相册与 Google Photos 立即识别
+            // 5. 写入系统相册 MediaStore (DCIM/Camera)
             var galleryUri: Uri? = null
             var galleryPath = finalLocalFile.absolutePath
             if (config.saveToSystemGallery) {
                 onProgress?.invoke(
                     ConversionProgress(
                         ConversionProgress.Stage.SAVING_TO_GALLERY,
-                        0.94f,
+                        0.95f,
                         "正在同步至系统相册 (DCIM/Camera/$fileName)..."
                     )
                 )
@@ -388,7 +464,10 @@ class MotionPhotoBuilder(private val context: Context) {
                     totalSizeBytes = finalLocalFile.length(),
                     coverTimestampUs = relativePresentationUs,
                     videoDurationMs = trimmedDurationMs,
-                    resolution = "${videoMetadata.displayWidth} × ${videoMetadata.displayHeight}"
+                    resolution = "${videoMetadata.displayWidth} × ${videoMetadata.displayHeight}",
+                    usedCustomCover = config.customCoverImageUri != null,
+                    clonedReferenceExif = config.referenceExifImageUri != null,
+                    longExposureMode = config.longExposureMode
                 )
             )
         } catch (e: Exception) {
@@ -400,9 +479,6 @@ class MotionPhotoBuilder(private val context: Context) {
         }
     }
 
-    /**
-     * 生成符合 Android Motion Photo 1.0 正则规范 ^([^\s\/\\][^\/\\]*MP)\.(JPG|jpg) 的文件名
-     */
     private fun buildCompliantFileName(format: OutputFormat): String {
         val sdf = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US)
         val timestamp = sdf.format(Date())
@@ -410,18 +486,164 @@ class MotionPhotoBuilder(private val context: Context) {
     }
 
     /**
-     * 提取关键帧为高质量 JPEG，并写入标准相机 EXIF 信息
+     * 准备静态主图 JPEG（支持外部高清图片混流、多帧长曝光合成、滤镜与机型水印，以及样张 EXIF 克隆）
      */
-    private fun extractFrameAsJpegWithExif(
+    private fun preparePrimaryJpegWithExif(
         videoUri: Uri,
-        timeUs: Long,
-        quality: Int,
-        format: OutputFormat
+        config: ConversionConfig,
+        trimStartUs: Long,
+        trimEndUs: Long
     ): File {
+        val rawBitmap: Bitmap = when {
+            config.customCoverImageUri != null -> {
+                decodeBitmapFromUri(config.customCoverImageUri)
+                    ?: extractSingleVideoFrame(videoUri, config.frameTimeUs)
+            }
+            config.longExposureMode != LongExposureMode.NONE -> {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, videoUri)
+                    synthesizeLongExposureBitmap(
+                        retriever = retriever,
+                        startUs = trimStartUs,
+                        endUs = trimEndUs,
+                        mode = config.longExposureMode,
+                        targetMaxDim = 1920
+                    ) ?: extractSingleVideoFrame(videoUri, config.frameTimeUs)
+                } finally {
+                    try {
+                        retriever.release()
+                    } catch (_: Exception) {}
+                }
+            }
+            else -> extractSingleVideoFrame(videoUri, config.frameTimeUs)
+        }
+
+        val styledBitmap = if (config.coverFilter != CoverFilter.ORIGINAL || config.watermarkEnabled) {
+            val processed = applyFilterAndWatermark(
+                source = rawBitmap,
+                filter = config.coverFilter,
+                watermarkEnabled = config.watermarkEnabled,
+                format = config.format
+            )
+            if (processed !== rawBitmap) {
+                rawBitmap.recycle()
+            }
+            processed
+        } else {
+            rawBitmap
+        }
+
+        val width = styledBitmap.width
+        val height = styledBitmap.height
+        val tempFile = File(context.cacheDir, "temp_frame_${System.currentTimeMillis()}.jpg")
+
+        FileOutputStream(tempFile).use { out ->
+            styledBitmap.compress(Bitmap.CompressFormat.JPEG, config.jpegQuality.coerceIn(75, 100), out)
+        }
+        styledBitmap.recycle()
+
+        // 写入默认旗舰相机 EXIF 标签
+        try {
+            val exif = ExifInterface(tempFile.absolutePath)
+            val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
+            exif.setAttribute(ExifInterface.TAG_MAKE, config.format.makeTag)
+            exif.setAttribute(ExifInterface.TAG_MODEL, config.format.modelTag)
+            exif.setAttribute(ExifInterface.TAG_LENS_MODEL, config.format.lensTag)
+            exif.setAttribute(ExifInterface.TAG_SOFTWARE, "Motion Studio v3.0 MD3E")
+            exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
+            exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
+            exif.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, exifDate)
+            exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME, "000")
+            exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, "000")
+            exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, "000")
+            exif.setAttribute(ExifInterface.TAG_F_NUMBER, "1.68")
+            exif.setAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS, "100")
+            exif.setAttribute(ExifInterface.TAG_FOCAL_LENGTH, "680/100")
+            exif.setAttribute(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, "24")
+            exif.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, width.toString())
+            exif.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, height.toString())
+            exif.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
+            exif.saveAttributes()
+        } catch (_: Exception) {}
+
+        // 若用户指定了本机相机样张 EXIF 克隆源 (参考 wszqkzqk/live-photo-conv copy-img-meta)，则克隆其全部相机参数
+        if (config.referenceExifImageUri != null) {
+            cloneExifFromReferenceUri(config.referenceExifImageUri, tempFile, width, height)
+        } else if (config.customCoverImageUri != null) {
+            // 如果使用了外部封面照片，也尽量保留该照片本身的拍摄参数
+            cloneExifFromReferenceUri(config.customCoverImageUri, tempFile, width, height)
+        }
+
+        return tempFile
+    }
+
+    /**
+     * 从本机样张克隆 25+ 项相机 EXIF 参数 (实现 copy-img-meta 逻辑)
+     */
+    private fun cloneExifFromReferenceUri(referenceUri: Uri, targetJpeg: File, width: Int, height: Int) {
+        try {
+            context.contentResolver.openInputStream(referenceUri)?.use { input ->
+                val srcExif = ExifInterface(input)
+                val dstExif = ExifInterface(targetJpeg.absolutePath)
+
+                val tagsToCopy = listOf(
+                    ExifInterface.TAG_MAKE,
+                    ExifInterface.TAG_MODEL,
+                    ExifInterface.TAG_SOFTWARE,
+                    ExifInterface.TAG_DATETIME,
+                    ExifInterface.TAG_DATETIME_ORIGINAL,
+                    ExifInterface.TAG_DATETIME_DIGITIZED,
+                    ExifInterface.TAG_SUBSEC_TIME,
+                    ExifInterface.TAG_SUBSEC_TIME_ORIGINAL,
+                    ExifInterface.TAG_SUBSEC_TIME_DIGITIZED,
+                    ExifInterface.TAG_F_NUMBER,
+                    ExifInterface.TAG_EXPOSURE_TIME,
+                    ExifInterface.TAG_ISO_SPEED_RATINGS,
+                    ExifInterface.TAG_FOCAL_LENGTH,
+                    ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM,
+                    ExifInterface.TAG_EXPOSURE_BIAS_VALUE,
+                    ExifInterface.TAG_WHITE_BALANCE,
+                    ExifInterface.TAG_FLASH,
+                    ExifInterface.TAG_METERING_MODE,
+                    ExifInterface.TAG_COLOR_SPACE,
+                    ExifInterface.TAG_LENS_MAKE,
+                    ExifInterface.TAG_LENS_MODEL,
+                    ExifInterface.TAG_GPS_LATITUDE,
+                    ExifInterface.TAG_GPS_LATITUDE_REF,
+                    ExifInterface.TAG_GPS_LONGITUDE,
+                    ExifInterface.TAG_GPS_LONGITUDE_REF
+                )
+
+                for (tag in tagsToCopy) {
+                    val value = srcExif.getAttribute(tag)
+                    if (!value.isNullOrBlank()) {
+                        dstExif.setAttribute(tag, value)
+                    }
+                }
+                dstExif.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, width.toString())
+                dstExif.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, height.toString())
+                dstExif.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
+                dstExif.saveAttributes()
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun decodeBitmapFromUri(uri: Uri): Bitmap? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extractSingleVideoFrame(videoUri: Uri, timeUs: Long): Bitmap {
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(context, videoUri)
-            val bitmap = retriever.getFrameAtTime(
+            return retriever.getFrameAtTime(
                 timeUs.coerceAtLeast(0L),
                 MediaMetadataRetriever.OPTION_CLOSEST
             ) ?: retriever.getFrameAtTime(
@@ -429,41 +651,6 @@ class MotionPhotoBuilder(private val context: Context) {
                 MediaMetadataRetriever.OPTION_CLOSEST_SYNC
             ) ?: retriever.frameAtTime
                 ?: throw IllegalStateException("无法从视频中解码静态封面帧")
-
-            val width = bitmap.width
-            val height = bitmap.height
-            val tempFile = File(context.cacheDir, "temp_frame_${System.currentTimeMillis()}.jpg")
-
-            FileOutputStream(tempFile).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
-            }
-            bitmap.recycle()
-
-            // 写入标准相机 EXIF 标签，确保小米/OPPO/华为/Google 相册将其识别为相机实拍照片
-            try {
-                val exif = ExifInterface(tempFile.absolutePath)
-                val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
-                exif.setAttribute(ExifInterface.TAG_MAKE, format.makeTag)
-                exif.setAttribute(ExifInterface.TAG_MODEL, format.modelTag)
-                exif.setAttribute(ExifInterface.TAG_SOFTWARE, "Motion Studio MD3E")
-                exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
-                exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
-                exif.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, exifDate)
-                exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME, "000")
-                exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, "000")
-                exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, "000")
-                exif.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, width.toString())
-                exif.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, height.toString())
-                exif.setAttribute(
-                    ExifInterface.TAG_ORIENTATION,
-                    ExifInterface.ORIENTATION_NORMAL.toString()
-                )
-                exif.saveAttributes()
-            } catch (_: Exception) {
-                // EXIF 写入失败不影响主流程
-            }
-
-            return tempFile
         } finally {
             try {
                 retriever.release()
@@ -472,9 +659,178 @@ class MotionPhotoBuilder(private val context: Context) {
     }
 
     /**
-     * 使用 MediaExtractor + MediaMuxer 无损裁剪并封装 MP4 视频流
-     * 包含：旋转角度保留、时间戳归零与单调递增保护、不兼容音频轨降级重试
+     * 多帧堆栈长曝光合成算法 (参考 wszqkzqk/live-photo-conv --long-exposure)
+     * 支持：
+     * - SILKY_BLUR (多帧均值慢门堆栈)
+     * - LIGHT_TRAIL (多帧高光最大值流光堆栈)
      */
+    private fun synthesizeLongExposureBitmap(
+        retriever: MediaMetadataRetriever,
+        startUs: Long,
+        endUs: Long,
+        mode: LongExposureMode,
+        targetMaxDim: Int
+    ): Bitmap? {
+        val safeStart = startUs.coerceAtLeast(0L)
+        val safeEnd = endUs.coerceAtLeast(safeStart + 200_000L)
+        val sampleCount = 6
+        val frames = mutableListOf<Bitmap>()
+
+        for (i in 0 until sampleCount) {
+            val tUs = safeStart + ((safeEnd - safeStart) * i) / (sampleCount - 1)
+            val bmp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                retriever.getScaledFrameAtTime(
+                    tUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    targetMaxDim,
+                    targetMaxDim
+                )
+            } else {
+                retriever.getFrameAtTime(tUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            }
+            if (bmp != null) {
+                frames.add(bmp)
+            }
+        }
+
+        if (frames.isEmpty()) return null
+        if (frames.size == 1) return frames.first()
+
+        val w = frames.first().width
+        val h = frames.first().height
+        val totalPixels = w * h
+        val count = frames.size
+
+        val rAcc = IntArray(totalPixels)
+        val gAcc = IntArray(totalPixels)
+        val bAcc = IntArray(totalPixels)
+        val rowPixels = IntArray(totalPixels)
+
+        frames.forEachIndexed { idx, frame ->
+            val scaled = if (frame.width == w && frame.height == h) {
+                frame
+            } else {
+                Bitmap.createScaledBitmap(frame, w, h, true)
+            }
+            scaled.getPixels(rowPixels, 0, w, 0, 0, w, h)
+            if (mode == LongExposureMode.SILKY_BLUR) {
+                for (p in 0 until totalPixels) {
+                    val c = rowPixels[p]
+                    rAcc[p] += (c shr 16) and 0xFF
+                    gAcc[p] += (c shr 8) and 0xFF
+                    bAcc[p] += c and 0xFF
+                }
+            } else {
+                // LIGHT_TRAIL: 峰值高光流光叠加 + 柔和底色
+                for (p in 0 until totalPixels) {
+                    val c = rowPixels[p]
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    if (idx == 0) {
+                        rAcc[p] = r
+                        gAcc[p] = g
+                        bAcc[p] = b
+                    } else {
+                        rAcc[p] = max(rAcc[p], r)
+                        gAcc[p] = max(gAcc[p], g)
+                        bAcc[p] = max(bAcc[p], b)
+                    }
+                }
+            }
+            if (scaled !== frame) scaled.recycle()
+            frame.recycle()
+        }
+
+        for (p in 0 until totalPixels) {
+            val r = if (mode == LongExposureMode.SILKY_BLUR) (rAcc[p] / count) else rAcc[p]
+            val g = if (mode == LongExposureMode.SILKY_BLUR) (gAcc[p] / count) else gAcc[p]
+            val b = if (mode == LongExposureMode.SILKY_BLUR) (bAcc[p] / count) else bAcc[p]
+            rowPixels[p] = (0xFF shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
+        }
+
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        out.setPixels(rowPixels, 0, w, 0, 0, w, h)
+        return out
+    }
+
+    /**
+     * 为静态封面图应用调色滤镜与光学机型铭牌水印
+     */
+    private fun applyFilterAndWatermark(
+        source: Bitmap,
+        filter: CoverFilter,
+        watermarkEnabled: Boolean,
+        format: OutputFormat
+    ): Bitmap {
+        val w = source.width
+        val h = source.height
+        val footerHeight = if (watermarkEnabled) (h * 0.10f).toInt().coerceAtLeast(64) else 0
+        val out = Bitmap.createBitmap(w, h + footerHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+
+        val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        when (filter) {
+            CoverFilter.ORIGINAL -> {}
+            CoverFilter.VIVID -> {
+                val cm = ColorMatrix().apply { setSaturation(1.32f) }
+                imagePaint.colorFilter = ColorMatrixColorFilter(cm)
+            }
+            CoverFilter.WARM_FILM -> {
+                val cm = ColorMatrix(
+                    floatArrayOf(
+                        1.10f, 0.04f, 0f, 0f, 8f,
+                        0f, 1.03f, 0f, 0f, 4f,
+                        0f, 0f, 0.90f, 0f, -6f,
+                        0f, 0f, 0f, 1f, 0f
+                    )
+                )
+                imagePaint.colorFilter = ColorMatrixColorFilter(cm)
+            }
+            CoverFilter.MONOCHROME -> {
+                val cm = ColorMatrix().apply { setSaturation(0f) }
+                imagePaint.colorFilter = ColorMatrixColorFilter(cm)
+            }
+        }
+        canvas.drawBitmap(source, 0f, 0f, imagePaint)
+
+        if (watermarkEnabled && footerHeight > 0) {
+            val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+            }
+            canvas.drawRect(RectF(0f, h.toFloat(), w.toFloat(), (h + footerHeight).toFloat()), bgPaint)
+
+            val padX = w * 0.04f
+            val centerY = h + footerHeight / 2f
+
+            val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#18181F")
+                textSize = (footerHeight * 0.30f).coerceAtLeast(18f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            }
+            val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#6E6E77")
+                textSize = (footerHeight * 0.21f).coerceAtLeast(13f)
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            }
+
+            canvas.drawText(
+                "${format.makeTag.uppercase()} · ${format.modelTag}",
+                padX,
+                centerY - footerHeight * 0.06f,
+                titlePaint
+            )
+            canvas.drawText(
+                "${format.lensTag}   |   24mm  f/1.68  1/125s  ISO100",
+                padX,
+                centerY + footerHeight * 0.24f,
+                subPaint
+            )
+        }
+
+        return out
+    }
+
     private fun extractVideoWithMuxer(
         videoUri: Uri,
         trimStartUs: Long,
@@ -490,9 +846,8 @@ class MotionPhotoBuilder(private val context: Context) {
                 includeAudio = includeAudio,
                 rotationDegrees = rotationDegrees
             )
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             if (includeAudio) {
-                // 如果部分特殊编码音频轨导致 MediaMuxer 异常，自动降级为纯视频轨重封装
                 try {
                     remuxVideoInternal(
                         videoUri = videoUri,
@@ -568,7 +923,6 @@ class MotionPhotoBuilder(private val context: Context) {
             val buffer = ByteBuffer.allocateDirect(maxSampleSize)
             val bufferInfo = MediaCodec.BufferInfo()
 
-            // 1. 写入视频轨道数据
             extractor.selectTrack(videoTrackIndex)
             extractor.seekTo(trimStartUs.coerceAtLeast(0L), MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
 
@@ -607,7 +961,6 @@ class MotionPhotoBuilder(private val context: Context) {
                 extractor.advance()
             }
 
-            // 2. 写入音频轨道数据（若开启）
             if (audioTrackIndex != null && muxerAudioTrack >= 0 && videoBasePtsUs >= 0L) {
                 extractor.unselectTrack(videoTrackIndex)
                 extractor.selectTrack(audioTrackIndex)
@@ -683,9 +1036,6 @@ class MotionPhotoBuilder(private val context: Context) {
         }
     }
 
-    /**
-     * 将生成的 Motion Photo 写入系统 MediaStore (DCIM/Camera)，确保所有手机相册立即可见
-     */
     private fun saveToMediaStoreGallery(sourceFile: File, displayName: String): Uri? {
         return try {
             val resolver = context.contentResolver

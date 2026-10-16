@@ -49,8 +49,6 @@ obj/
 *.hprof
 
 # Keystore files
-*.jks
-*.keystore
 
 # External native build folder
 .externalNativeBuild

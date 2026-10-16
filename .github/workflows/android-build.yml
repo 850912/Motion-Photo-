@@ -1,42 +1,71 @@
-name: Android Build
+name: Android Release & Debug Build (Motion Studio v3.0 MD3E)
 
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
         cache: 'gradle'
-    
+
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
-    
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug --stacktrace
-    
-    - name: Upload Debug APK
+
+    - name: Build Signed Release APK & Debug APK
+      run: ./gradlew assembleRelease assembleDebug --stacktrace
+
+    - name: Prepare Release Package Artifacts
+      run: |
+        mkdir -p release-dist
+        cp app/build/outputs/apk/release/app-release.apk release-dist/MotionStudio-v3.0-MD3E-Release-signed.apk
+        cp app/build/outputs/apk/debug/app-debug.apk release-dist/MotionStudio-v3.0-MD3E-Debug.apk
+        ls -lh release-dist/
+
+    - name: Upload Signed Release APK Artifact (推荐安装)
       uses: actions/upload-artifact@v4
       with:
-        name: app-debug
-        path: app/build/outputs/apk/debug/app-debug.apk
-        
-    - name: Upload Build Reports
-      if: failure()
+        name: MotionStudio-v3.0-MD3E-Release-APK
+        path: release-dist/MotionStudio-v3.0-MD3E-Release-signed.apk
+
+    - name: Upload Debug APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: build-reports
-        path: app/build/reports/
+        name: MotionStudio-v3.0-MD3E-Debug-APK
+        path: release-dist/MotionStudio-v3.0-MD3E-Debug.apk
+
+    - name: Publish GitHub Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v3.0.0-md3e
+        name: "Motion Studio v3.0.0 (Material 3 Expressive Release)"
+        body: |
+          ### Motion Studio v3.0.0 (MD3 Expressive 正式签名版 Release)
+          - **已内置正式签名 (`V1 + V2 + V3 Signing`) 与 R8 代码/资源压缩优化**，下载 `MotionStudio-v3.0-MD3E-Release-signed.apk` 即可直接在所有 Android 8.0–16 手机上安装。
+          - **新增开源项目融合特性**：
+            1. **图影混流合成 (`Photo + Video Muxer`)**：支持任选外部高清静态图片（JPG/PNG/HEIC）与视频流合成为实况照片（参考 `PetrVys/MotionPhoto2` 与 `googleinterns/libmphoto`）。
+            2. **本机样张 EXIF 克隆 (`copy-img-meta`)**：支持从本机相机实拍照片一键克隆 25+ 项相机 EXIF 标签（参考 `wszqkzqk/live-photo-conv`），彻底解决各品牌相册私货校验问题。
+            3. **动态长曝光流光封面 (`Long-Exposure Cover`) & 色彩滤镜**：多帧堆栈合成丝滑长曝光静态封面，并提供鲜明流光、胶片暖调、经典黑白滤镜。
+            4. **实况无损拆解 (`Demuxer`) & 损坏实况一键修复 (`live-photo-repair`)**：支持一键提取内嵌 MP4 视频到相册、提取纯净静态 JPG，以及自动扫描 `ftyp` 偏移修复损坏的实况照片。
+            5. **多视频批量合成队列 (`Batch Queue`)**：支持一次选择多个视频批量转换为实况照片。
+        files: |
+          release-dist/MotionStudio-v3.0-MD3E-Release-signed.apk
+          release-dist/MotionStudio-v3.0-MD3E-Debug.apk

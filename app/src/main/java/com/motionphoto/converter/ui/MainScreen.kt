@@ -44,8 +44,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.AutoAwesomeMotion
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CameraEnhance
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -56,6 +57,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MotionPhotosOn
 import androidx.compose.material.icons.filled.MusicNote
@@ -115,7 +117,6 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.motionphoto.converter.core.MotionPhotoBuilder
-import com.motionphoto.converter.core.MotionPhotoInspector
 import com.motionphoto.converter.ui.components.AppTab
 import com.motionphoto.converter.ui.components.ExpressiveConnectedButtonGroup
 import com.motionphoto.converter.ui.components.ExpressiveFloatingToolbar
@@ -142,17 +143,17 @@ fun MainScreen(
     val inspectorState by viewModel.inspectorState.collectAsState()
     val historyFiles by viewModel.historyFiles.collectAsState()
     val themeSettings by viewModel.themeSettings.collectAsState()
+    val statusBanner by viewModel.statusBannerMessage.collectAsState()
     val systemDark = isSystemInDarkTheme()
     val isDark = themeSettings.darkModeOverride ?: systemDark
 
     var showPaletteSheet by remember { mutableStateOf(false) }
 
-    // 权限请求器
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ -> }
 
-    // 现代 Photo Picker 选视频 + GetContent 兜底
+    // 1. 单视频选择器
     val pickVideoVisualMedia = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
@@ -169,7 +170,34 @@ fun MainScreen(
         }
     }
 
-    // 实况检验器选图片
+    // 2. 批量多视频选择器 (v3.0 新增：Batch Queue)
+    val pickMultipleVideos = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(12)
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            viewModel.startBatchConversion(uris)
+        }
+    }
+
+    // 3. 外部高清静态封面选择器 (v3.0 新增：Photo + Video Muxer)
+    val pickCustomCoverPhoto = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.setCustomCoverImage(uri)
+        }
+    }
+
+    // 4. 本机相机参考样张 EXIF 克隆选择器 (v3.0 新增：copy-img-meta)
+    val pickReferenceExifPhoto = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.setReferenceExifImage(uri)
+        }
+    }
+
+    // 5. 实况检验器选图片
     val pickImageForInspector = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -181,6 +209,16 @@ fun MainScreen(
     val launchVideoPicker = {
         try {
             pickVideoVisualMedia.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+            )
+        } catch (_: Exception) {
+            pickVideoFallback.launch("video/*")
+        }
+    }
+
+    val launchBatchVideoPicker = {
+        try {
+            pickMultipleVideos.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
             )
         } catch (_: Exception) {
@@ -246,11 +284,19 @@ fun MainScreen(
                         StudioTabContent(
                             state = studioState,
                             onPickVideo = launchVideoPicker,
+                            onPickBatchVideos = launchBatchVideoPicker,
+                            onPickCustomCover = { pickCustomCoverPhoto.launch("image/*") },
+                            onClearCustomCover = { viewModel.setCustomCoverImage(null) },
+                            onPickReferenceExif = { pickReferenceExifPhoto.launch("image/*") },
+                            onClearReferenceExif = { viewModel.setReferenceExifImage(null) },
                             onUpdateCoverTime = viewModel::updateCoverFrameTime,
                             onUpdateTrimRange = viewModel::updateTrimRange,
                             onUpdateAudio = viewModel::updateIncludeAudio,
                             onUpdateQuality = viewModel::updateJpegQuality,
                             onUpdateFormat = viewModel::updateOutputFormat,
+                            onUpdateLongExposure = viewModel::updateLongExposureMode,
+                            onUpdateFilter = viewModel::updateCoverFilter,
+                            onUpdateWatermark = viewModel::updateWatermarkEnabled,
                             onStartConvert = viewModel::startConversion,
                             onReset = viewModel::resetStudio,
                             onInspectFile = { file ->
@@ -266,7 +312,9 @@ fun MainScreen(
                         InspectorTabContent(
                             state = inspectorState,
                             onPickImage = { pickImageForInspector.launch("image/*") },
-                            onShareFile = { file -> shareMotionPhoto(context, file) }
+                            onExportVideo = viewModel::exportInspectedVideo,
+                            onExportStill = viewModel::exportInspectedStill,
+                            onRepairMotionPhoto = viewModel::repairInspectedMotionPhoto
                         )
                     }
 
@@ -279,6 +327,29 @@ fun MainScreen(
                             onPickVideo = launchVideoPicker
                         )
                     }
+                }
+            }
+
+            // 顶部浮动状态胶囊提示
+            AnimatedVisibility(
+                visible = statusBanner != null,
+                enter = fadeIn() + scaleIn(initialScale = 0.9f),
+                exit = fadeOut() + scaleOut(targetScale = 0.9f),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    tonalElevation = 8.dp
+                ) {
+                    Text(
+                        text = statusBanner ?: "",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                    )
                 }
             }
         }
@@ -349,7 +420,7 @@ private fun ExpressiveTopBar(
                         color = MaterialTheme.colorScheme.tertiaryContainer
                     ) {
                         Text(
-                            text = "MD3E",
+                            text = "v3.0 Release",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
@@ -358,9 +429,9 @@ private fun ExpressiveTopBar(
                 }
                 Text(
                     text = when (currentTab) {
-                        AppTab.STUDIO -> "Android 16 实况照片无损合成工坊"
-                        AppTab.INSPECTOR -> "XMP 容器结构与尾部视频流检验器"
-                        AppTab.GALLERY -> "已生成实况作品与多品牌相册指南"
+                        AppTab.STUDIO -> "图影混流 · 长曝光 · 批量实况合成工坊"
+                        AppTab.INSPECTOR -> "XMP 检验 · 无损拆解 MP4/JPG · 一键修复"
+                        AppTab.GALLERY -> "本机已生成实况作品库与开源协议矩阵"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -413,11 +484,19 @@ private fun ExpressiveTopBar(
 private fun StudioTabContent(
     state: MainViewModel.StudioState,
     onPickVideo: () -> Unit,
+    onPickBatchVideos: () -> Unit,
+    onPickCustomCover: () -> Unit,
+    onClearCustomCover: () -> Unit,
+    onPickReferenceExif: () -> Unit,
+    onClearReferenceExif: () -> Unit,
     onUpdateCoverTime: (Long) -> Unit,
     onUpdateTrimRange: (Long, Long) -> Unit,
     onUpdateAudio: (Boolean) -> Unit,
     onUpdateQuality: (Int) -> Unit,
     onUpdateFormat: (MotionPhotoBuilder.OutputFormat) -> Unit,
+    onUpdateLongExposure: (MotionPhotoBuilder.LongExposureMode) -> Unit,
+    onUpdateFilter: (MotionPhotoBuilder.CoverFilter) -> Unit,
+    onUpdateWatermark: (Boolean) -> Unit,
     onStartConvert: () -> Unit,
     onReset: () -> Unit,
     onInspectFile: (File) -> Unit,
@@ -437,17 +516,27 @@ private fun StudioTabContent(
     ) { current ->
         when (current) {
             is MainViewModel.StudioState.Idle -> {
-                StudioIdleHeroView(onPickVideo = onPickVideo)
+                StudioIdleHeroView(
+                    onPickVideo = onPickVideo,
+                    onPickBatchVideos = onPickBatchVideos
+                )
             }
 
             is MainViewModel.StudioState.Editing -> {
                 StudioEditorView(
                     state = current,
+                    onPickCustomCover = onPickCustomCover,
+                    onClearCustomCover = onClearCustomCover,
+                    onPickReferenceExif = onPickReferenceExif,
+                    onClearReferenceExif = onClearReferenceExif,
                     onUpdateCoverTime = onUpdateCoverTime,
                     onUpdateTrimRange = onUpdateTrimRange,
                     onUpdateAudio = onUpdateAudio,
                     onUpdateQuality = onUpdateQuality,
                     onUpdateFormat = onUpdateFormat,
+                    onUpdateLongExposure = onUpdateLongExposure,
+                    onUpdateFilter = onUpdateFilter,
+                    onUpdateWatermark = onUpdateWatermark,
                     onStartConvert = onStartConvert,
                     onCancel = onReset
                 )
@@ -465,13 +554,13 @@ private fun StudioTabContent(
             is MainViewModel.StudioState.Success -> {
                 StudioSuccessView(
                     result = current.result,
+                    batchCount = current.batchCount,
                     onShare = { onShareFile(current.result.localFile) },
                     onInspect = { onInspectFile(current.result.localFile) },
                     onConvertAnother = {
                         onReset()
                         onPickVideo()
-                    },
-                    onBackHome = onReset
+                    }
                 )
             }
 
@@ -489,12 +578,10 @@ private fun StudioTabContent(
     }
 }
 
-/**
- * 创作工坊：空闲态 MD3 Expressive 英雄主屏
- */
 @Composable
 private fun StudioIdleHeroView(
-    onPickVideo: () -> Unit
+    onPickVideo: () -> Unit,
+    onPickBatchVideos: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     Column(
@@ -504,7 +591,6 @@ private fun StudioIdleHeroView(
             .padding(horizontal = 20.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 主视觉超椭圆英雄卡片
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(36.dp),
@@ -513,11 +599,11 @@ private fun StudioIdleHeroView(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 28.dp),
+                    .padding(horizontal = 24.dp, vertical = 26.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 ExpressiveMorphingBadge(
-                    modifier = Modifier.size(168.dp),
+                    modifier = Modifier.size(160.dp),
                     lobes = 8f,
                     waveAmplitude = 0.11f
                 ) {
@@ -528,12 +614,12 @@ private fun StudioIdleHeroView(
                         Icon(
                             imageVector = Icons.Default.MotionPhotosOn,
                             contentDescription = null,
-                            modifier = Modifier.size(54.dp),
+                            modifier = Modifier.size(52.dp),
                             tint = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "LIVE · MP",
+                            text = "LIVE · v3.0",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -541,44 +627,43 @@ private fun StudioIdleHeroView(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(22.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
                 Text(
-                    text = "让每一段视频\n化作鲜活的实况照片",
+                    text = "全能 Android 实况照片工坊",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "任意挑选高光封面帧、自由裁剪片段，无损封装符合 Android Motion Photo 1.0 与各大国产手机相册标准的实况照片，自动保存至系统相册。",
+                    text = "融合 MotionPhoto2、libmphoto 与 live-photo-conv 三大开源项目精髓：支持视频转实况、外部高清图+视频混流、动态长曝光封面、本机样张 EXIF 克隆、批量队列以及无损拆解修复。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // 特性胶囊标签行
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
                 ) {
-                    ExpressiveFeaturePill("微秒级选封面", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
-                    ExpressiveFeaturePill("无损 MP4 封装", MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer)
-                    ExpressiveFeaturePill("直存系统相册", MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer)
+                    ExpressiveFeaturePill("图影混流合成", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
+                    ExpressiveFeaturePill("长曝光流光封面", MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer)
+                    ExpressiveFeaturePill("样张 EXIF 克隆", MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer)
                 }
 
-                Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
-                // 主操作大尺寸弹簧超椭圆按钮
+                // 主操作：单视频精修转实况
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(64.dp)
+                        .height(62.dp)
                         .expressiveBounceClick(pressedScale = 0.94f) {
                             onPickVideo()
                         },
@@ -598,33 +683,66 @@ private fun StudioIdleHeroView(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "从相册选择视频开始创作",
+                            text = "选择视频精修 / 图影混流创作",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = MaterialTheme.colorScheme.onPrimary
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // 副操作：多视频批量一键合成队列
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .expressiveBounceClick(pressedScale = 0.95f) {
+                            onPickBatchVideos()
+                        },
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Layers,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "批量选择多段视频一键队列转实况",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // 多品牌协议支持展示矩阵
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             BrandSupportMiniCard(
-                title = "Google Pixel",
-                subtitle = "Motion Photo 1.0 标准容器目录",
-                badge = "PXL_*MP.jpg",
+                title = "图影混流 & EXIF 克隆",
+                subtitle = "支持外部高像素 JPG + MP4 混流及相机样张 EXIF 完整移植",
+                badge = "MotionPhoto2",
                 modifier = Modifier.weight(1f)
             )
             BrandSupportMiniCard(
-                title = "小米 / OPPO / 华为",
-                subtitle = "MicroVideo + O-Live + EXIF 全注入",
-                badge = "MVIMG_*MP.jpg",
+                title = "无损拆解 & 实况修复",
+                subtitle = "一键导出独立 MP4 / JPG 或修复损坏的 XMP 偏移量",
+                badge = "libmphoto",
                 modifier = Modifier.weight(1f)
             )
         }
@@ -695,24 +813,28 @@ private fun BrandSupportMiniCard(
     }
 }
 
-/**
- * 创作工坊：交互式视频裁剪、封面帧精修与多格式合成编辑器
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StudioEditorView(
     state: MainViewModel.StudioState.Editing,
+    onPickCustomCover: () -> Unit,
+    onClearCustomCover: () -> Unit,
+    onPickReferenceExif: () -> Unit,
+    onClearReferenceExif: () -> Unit,
     onUpdateCoverTime: (Long) -> Unit,
     onUpdateTrimRange: (Long, Long) -> Unit,
     onUpdateAudio: (Boolean) -> Unit,
     onUpdateQuality: (Int) -> Unit,
     onUpdateFormat: (MotionPhotoBuilder.OutputFormat) -> Unit,
+    onUpdateLongExposure: (MotionPhotoBuilder.LongExposureMode) -> Unit,
+    onUpdateFilter: (MotionPhotoBuilder.CoverFilter) -> Unit,
+    onUpdateWatermark: (Boolean) -> Unit,
     onStartConvert: () -> Unit,
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
-    var previewMode by remember { mutableStateOf("VIDEO") } // "VIDEO" or "COVER"
+    var previewMode by remember { mutableStateOf("VIDEO") }
     var isVideoPlaying by remember { mutableStateOf(true) }
     var showFormatSheet by remember { mutableStateOf(false) }
 
@@ -750,19 +872,15 @@ private fun StudioEditorView(
             .padding(horizontal = 20.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. 顶部模式切换：动态视频预览 vs 静态封面帧高清预览
         ExpressiveConnectedButtonGroup(
             items = listOf("VIDEO", "COVER"),
             selectedItem = previewMode,
-            onSelect = { mode ->
-                previewMode = mode
-            },
+            onSelect = { mode -> previewMode = mode },
             labelProvider = { mode ->
                 if (mode == "VIDEO") "动态视频实时预览" else "静态封面帧定格预览"
             }
         )
 
-        // 2. 主预览视窗 (超椭圆圆角容器)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -796,10 +914,16 @@ private fun StudioEditorView(
                         }
                 )
             } else {
-                val bitmap = state.coverPreviewBitmap
-                if (bitmap != null) {
+                if (state.customCoverImageUri != null) {
+                    AsyncImage(
+                        model = state.customCoverImageUri,
+                        contentDescription = "外部高清封面",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else if (state.coverPreviewBitmap != null) {
                     Image(
-                        bitmap = bitmap.asImageBitmap(),
+                        bitmap = state.coverPreviewBitmap.asImageBitmap(),
                         contentDescription = "封面帧预览",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
@@ -814,7 +938,6 @@ private fun StudioEditorView(
                 }
             }
 
-            // 左上角媒体参数胶囊
             Row(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -840,7 +963,6 @@ private fun StudioEditorView(
                 )
             }
 
-            // 右下角播放/暂停或封面时间戳胶囊
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -853,7 +975,11 @@ private fun StudioEditorView(
                     color = Color.Black.copy(alpha = 0.65f)
                 ) {
                     Text(
-                        text = "封面 @ ${state.coverTimeUs / 1000L} ms",
+                        text = when {
+                            state.customCoverImageUri != null -> "外部高清主图混流"
+                            state.longExposureMode != MotionPhotoBuilder.LongExposureMode.NONE -> state.longExposureMode.title
+                            else -> "封面 @ ${state.coverTimeUs / 1000L} ms"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
@@ -881,15 +1007,13 @@ private fun StudioEditorView(
             }
         }
 
-        // 3. 封面帧时间轴胶片精修卡片
+        // 封面帧时间轴胶片精修卡
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
         ) {
-            Column(
-                modifier = Modifier.padding(18.dp)
-            ) {
+            Column(modifier = Modifier.padding(18.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -906,7 +1030,7 @@ private fun StudioEditorView(
                             modifier = Modifier.size(20.dp)
                         )
                         Text(
-                            text = "静态封面帧时间点",
+                            text = "静态封面帧时间点与长曝光堆栈",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
@@ -926,7 +1050,6 @@ private fun StudioEditorView(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 8 帧胶片缩略图条
                 if (state.timelineThumbnails.isNotEmpty()) {
                     Row(
                         modifier = Modifier
@@ -970,15 +1093,178 @@ private fun StudioEditorView(
                     valueRange = minUs..maxUs
                 )
 
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 动态长曝光模式选择 (参考 wszqkzqk/live-photo-conv --long-exposure)
                 Text(
-                    text = "拖动滑块或点击胶片帧挑选最清晰的一瞬作为相册静态主图，时间戳将精确写入 XMP。",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = "封面帧合成模式 (--long-exposure 多帧堆栈)",
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                ExpressiveConnectedButtonGroup(
+                    items = MotionPhotoBuilder.LongExposureMode.values().toList(),
+                    selectedItem = state.longExposureMode,
+                    onSelect = { mode ->
+                        previewMode = "COVER"
+                        onUpdateLongExposure(mode)
+                    },
+                    labelProvider = { it.title }
                 )
             }
         }
 
-        // 4. 视频裁剪区间 & 原声/画质控制卡片
+        // 新增：开源进阶工坊卡片 (图影混流 + 样张 EXIF 克隆 + 滤镜与机型水印)
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.42f)
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "开源生态进阶工坊 (图影混流 · EXIF 克隆 · 滤镜水印)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+
+                // 1. 外部高清静态主图混流 (PetrVys/MotionPhoto2 & libmphoto)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "图影混流：外部高清静态主图",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = state.customCoverName?.let { "已选外部主图：$it" }
+                                ?: "可选任意高像素 JPG/PNG/HEIC 照片与当前视频合成为实况",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (state.customCoverImageUri != null) {
+                        OutlinedButton(
+                            onClick = onClearCustomCover,
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("还原视频帧")
+                        }
+                    } else {
+                        FilledTonalButton(
+                            onClick = {
+                                previewMode = "COVER"
+                                onPickCustomCover()
+                            },
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("选外部照片")
+                        }
+                    }
+                }
+
+                // 2. 本机相机参考样张 EXIF 克隆 (wszqkzqk/live-photo-conv copy-img-meta)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "本机样张 EXIF 克隆 (copy-img-meta)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = state.referenceExifName?.let { "已克隆样张：$it" }
+                                ?: "从本机相机拍摄的照片复制 25+ 项 EXIF 参数，100% 绕过厂商相册校验",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (state.referenceExifImageUri != null) {
+                        OutlinedButton(
+                            onClick = onClearReferenceExif,
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("清除样张")
+                        }
+                    } else {
+                        FilledTonalButton(
+                            onClick = onPickReferenceExif,
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("选本机样张")
+                        }
+                    }
+                }
+
+                // 3. 封面调色滤镜
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "封面色彩风格滤镜",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    ExpressiveConnectedButtonGroup(
+                        items = MotionPhotoBuilder.CoverFilter.values().toList(),
+                        selectedItem = state.coverFilter,
+                        onSelect = { filter ->
+                            previewMode = "COVER"
+                            onUpdateFilter(filter)
+                        },
+                        labelProvider = { it.title }
+                    )
+                }
+
+                // 4. 光学机型边框铭牌水印开关
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "底部旗舰影像铭牌水印 (Leica / Hasselblad / Pixel)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "在静态封面底部叠加所选协议对应的相机型号与光学参数横幅",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = state.watermarkEnabled,
+                        onCheckedChange = onUpdateWatermark
+                    )
+                }
+            }
+        }
+
+        // 视频裁剪区间 & 原声/画质控制卡片
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(28.dp),
@@ -1027,7 +1313,6 @@ private fun StudioEditorView(
                     valueRange = 0f..totalDurationFloat
                 )
 
-                // 原声保留开关
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1061,7 +1346,6 @@ private fun StudioEditorView(
                     )
                 }
 
-                // JPEG 封面画质连通按钮组
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "主图 JPEG 编码品质",
@@ -1084,7 +1368,7 @@ private fun StudioEditorView(
             }
         }
 
-        // 5. 目标厂商 XMP 协议选择器卡片
+        // 目标厂商 XMP 协议选择器卡片
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1161,7 +1445,7 @@ private fun StudioEditorView(
             }
         }
 
-        // 6. 底部合成与取消双操作栏
+        // 底部合成与取消双操作栏
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1222,6 +1506,7 @@ private fun StudioEditorView(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -1283,7 +1568,7 @@ private fun StudioEditorView(
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = fmt.subtitle,
+                                    text = "${fmt.subtitle} · ${fmt.modelTag}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -1311,9 +1596,6 @@ private fun StudioEditorView(
     }
 }
 
-/**
- * 创作工坊：MD3 Expressive 波浪进度与多边形形变合成状态屏
- */
 @Composable
 private fun StudioConvertingView(
     progress: Float,
@@ -1369,7 +1651,7 @@ private fun StudioConvertingView(
 
         Text(
             text = when (stage) {
-                MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_FRAME -> "正在提取高清封面并写入相机 EXIF"
+                MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_FRAME -> "正在处理高清封面并写入相机 EXIF"
                 MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_VIDEO -> "正在无损重封装 MP4 动态轨道"
                 MotionPhotoBuilder.ConversionProgress.Stage.WRITING_METADATA -> "正在注入标准 XMP 容器目录"
                 MotionPhotoBuilder.ConversionProgress.Stage.COMBINING -> "正在拼接 JPEG 与尾部 MP4 流"
@@ -1401,16 +1683,13 @@ private fun StudioConvertingView(
     }
 }
 
-/**
- * 创作工坊：合成成功与实况即时交互预览页
- */
 @Composable
 private fun StudioSuccessView(
     result: MotionPhotoBuilder.ConversionResult,
+    batchCount: Int,
     onShare: () -> Unit,
     onInspect: () -> Unit,
-    onConvertAnother: () -> Unit,
-    onBackHome: () -> Unit
+    onConvertAnother: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     Column(
@@ -1420,7 +1699,6 @@ private fun StudioSuccessView(
             .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 顶部成功横幅
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(28.dp),
@@ -1449,7 +1727,11 @@ private fun StudioSuccessView(
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "实况照片已写入系统相册！",
+                        text = if (batchCount > 1) {
+                            "批量合成成功！共导出 $batchCount 张实况照片"
+                        } else {
+                            "实况照片已写入系统相册！"
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -1463,7 +1745,6 @@ private fun StudioSuccessView(
             }
         }
 
-        // 交互式实况预览卡片（默认自动播放或点击播放内嵌视频）
         LiveMotionPhotoPlayerCard(
             coverImageModel = result.localFile,
             videoFileOrUri = result.localFile,
@@ -1472,7 +1753,6 @@ private fun StudioSuccessView(
             autoPlayInitially = true
         )
 
-        // 容器二进制结构明细卡
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(28.dp),
@@ -1490,15 +1770,24 @@ private fun StudioSuccessView(
                 MetricRow("输出文件名", result.localFile.name)
                 MetricRow("协议标准", "${result.format.displayName} (${result.format.badge})")
                 MetricRow(
+                    "封面来源",
+                    when {
+                        result.usedCustomCover -> "外部高清图片混流 (Photo + Video Muxer)"
+                        result.longExposureMode != MotionPhotoBuilder.LongExposureMode.NONE -> result.longExposureMode.title
+                        else -> "视频关键帧提取 (@ ${result.coverTimestampUs / 1000L} ms)"
+                    }
+                )
+                if (result.clonedReferenceExif) {
+                    MetricRow("EXIF 增强", "已完整克隆本机相机样张 EXIF 参数")
+                }
+                MetricRow(
                     "文件结构分布",
                     "JPEG 主图 ${formatBytes(result.jpegSizeBytes)} + 尾部 MP4 ${formatBytes(result.videoSizeBytes)}"
                 )
                 MetricRow("总文件大小", formatBytes(result.totalSizeBytes))
-                MetricRow("封面帧微秒时间戳", "${result.coverTimestampUs} μs (${result.coverTimestampUs / 1000L} ms)")
             }
         }
 
-        // 操作按钮组
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1512,7 +1801,7 @@ private fun StudioSuccessView(
             ) {
                 Icon(imageVector = Icons.Default.Verified, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("检验 XMP 结构", fontWeight = FontWeight.Bold)
+                Text("检验与无损拆解", fontWeight = FontWeight.Bold)
             }
 
             Button(
@@ -1628,13 +1917,15 @@ private fun StudioErrorView(
 }
 
 /**
- * Tab 2：实况检验器 (XMP 元数据与内嵌 MP4 深度检验 & 实况回放)
+ * Tab 2：实况检验器、无损拆解器 (Demuxer) 与损坏实况一键修复器 (live-photo-repair)
  */
 @Composable
 private fun InspectorTabContent(
     state: MainViewModel.InspectorState,
     onPickImage: () -> Unit,
-    onShareFile: (File) -> Unit
+    onExportVideo: () -> Unit,
+    onExportStill: () -> Unit,
+    onRepairMotionPhoto: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     var showRawXmp by remember { mutableStateOf(false) }
@@ -1646,7 +1937,6 @@ private fun InspectorTabContent(
             .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 顶部选图检验卡片
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(30.dp),
@@ -1657,13 +1947,13 @@ private fun InspectorTabContent(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "实况照片 XMP & 二进制检验器",
+                    text = "XMP 检验 · 无损拆解 · 损坏修复",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.ExtraBold
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "选择任意 JPG / MP.jpg 照片，解析其内部 APP1 XMP 容器目录、检测尾部 MP4 ftyp 偏移量，并直接播放提取出的实况视频轨。",
+                    text = "集成 libmphoto 与 live-photo-conv 拆解修复能力：可检验任意实况照片、提取内嵌 MP4 到相册、提取纯净静态 JPG，或一键修复损坏的实况元数据。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -1678,7 +1968,7 @@ private fun InspectorTabContent(
                 ) {
                     Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("从相册选择照片进行实况检验", fontWeight = FontWeight.Bold)
+                    Text("从相册选择照片进行检验 / 拆解 / 修复", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1709,7 +1999,7 @@ private fun InspectorTabContent(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "您可以在「创作工坊」合成后点击检验，或直接点击上方按钮挑选任意照片。",
+                            text = "挑选任意实况照片即可在此回放实况视频、单独导出 MP4 视频流，或修复无法被相册识别的动态照片。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
@@ -1747,7 +2037,6 @@ private fun InspectorTabContent(
             is MainViewModel.InspectorState.ResultReady -> {
                 val report = state.report
 
-                // 检验结论徽章卡
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(26.dp),
@@ -1774,8 +2063,10 @@ private fun InspectorTabContent(
                             Text(
                                 text = if (report.isValidMotionPhoto) {
                                     "检验通过：有效的 Android 实况照片"
+                                } else if (report.canBeRepaired) {
+                                    "检测到内嵌视频但 XMP 元数据异常（可一键修复）"
                                 } else {
-                                    "普通静态 JPEG（未检出完整实况轨道）"
+                                    "普通静态 JPEG（未检出内嵌视频轨道）"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold
@@ -1800,7 +2091,6 @@ private fun InspectorTabContent(
                     }
                 }
 
-                // 如果提取出了内嵌 MP4，展示实况交互播放器
                 if (report.extractedVideoFile != null) {
                     LiveMotionPhotoPlayerCard(
                         coverImageModel = state.sourceUriOrFile,
@@ -1809,9 +2099,67 @@ private fun InspectorTabContent(
                         durationMs = 2500L,
                         autoPlayInitially = true
                     )
+
+                    // v3.0 新增：无损拆解 (Demuxer) 与损坏实况一键修复面板
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(26.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "无损拆解导出 & 实况修复工具箱 (libmphoto / live-photo-conv)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                FilledTonalButton(
+                                    onClick = onExportVideo,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(50.dp),
+                                    shape = RoundedCornerShape(18.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.VideoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("提取视频 (.mp4)", fontWeight = FontWeight.Bold)
+                                }
+
+                                FilledTonalButton(
+                                    onClick = onExportStill,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(50.dp),
+                                    shape = RoundedCornerShape(18.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.PhotoAlbum, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("提取主图 (.jpg)", fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            Button(
+                                onClick = onRepairMotionPhoto,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp),
+                                shape = RoundedCornerShape(18.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Build, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("一键重建全兼容 XMP 并修复导出至相册", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
 
-                // 详细元数据报告卡
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(26.dp),
@@ -1887,9 +2235,6 @@ private fun InspectorTabContent(
     }
 }
 
-/**
- * Tab 3：已生成实况作品管理 & 国产手机相册兼容性指南
- */
 @Composable
 private fun GalleryAndGuideTabContent(
     historyFiles: List<File>,
@@ -1997,7 +2342,7 @@ private fun GalleryAndGuideTabContent(
                             Spacer(modifier = Modifier.height(6.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 ExpressiveFeaturePill(
-                                    text = "实况播放 / 检验",
+                                    text = "播放 / 拆解 / 修复",
                                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
@@ -2029,40 +2374,6 @@ private fun GalleryAndGuideTabContent(
                         }
                     }
                 }
-            }
-        }
-
-        // 多品牌相册识别说明卡
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "为什么重构后能被系统相册识别？",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Text(
-                    text = "1. 标准 RDF 容器结构：修复了旧版将 XML 字符串转义写入导致 XMP 损坏的 Bug，完整构建 Container:Directory 序列。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Text(
-                    text = "2. 相机 EXIF 与文件命名：自动写入相机 Make/Model/DateTimeOriginal 并采用官方 *MP.jpg 命名规范，直接通过 MediaStore 写入系统相册 DCIM/Camera。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Text(
-                    text = "3. 竖屏旋转与时间戳对齐：自动保留视频旋转矩阵并写入精确封面微秒时间戳，杜绝竖屏拉伸与音画不同步。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
             }
         }
 

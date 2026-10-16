@@ -11,21 +11,39 @@ android {
         applicationId = "com.motionphoto.converter"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.0.0-md3e"
+        versionCode = 3
+        versionName = "3.0.0-md3e-release"
 
         vectorDrawables {
             useSupportLibrary = true
         }
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("release-keystore.jks")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "motionstudio2026"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "motionstudio"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: "motionstudio2026"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
     }
 

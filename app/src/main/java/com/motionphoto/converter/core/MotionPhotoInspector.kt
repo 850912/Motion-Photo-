@@ -1,7 +1,11 @@
 package com.motionphoto.converter.core
 
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import com.adobe.internal.xmp.XMPMeta
 import com.adobe.internal.xmp.XMPMetaFactory
 import kotlinx.coroutines.Dispatchers
@@ -10,9 +14,16 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * 动态照片（Motion Photo）二进制容器与 XMP 深度检验器
+ * 动态照片（Motion Photo）二进制容器检验、无损拆解 (Demuxer) 与一键修复器 (Repair)
+ *
+ * 参考开源项目：
+ * - googleinterns/libmphoto (Demuxer: 分离静态主图与内嵌 MP4 视频流)
+ * - wszqkzqk/live-photo-conv (live-photo-extract & live-photo-repair: 自动扫描 ftyp 偏移并重建损坏的 XMP 容器目录)
  */
 object MotionPhotoInspector {
 
@@ -20,6 +31,7 @@ object MotionPhotoInspector {
         val fileName: String,
         val totalFileSize: Long,
         val isValidMotionPhoto: Boolean,
+        val canBeRepaired: Boolean,
         val detectedStandards: List<String>,
         val hasXmpPacket: Boolean,
         val rawXmpSnippet: String,
@@ -163,7 +175,9 @@ object MotionPhotoInspector {
                     if (declaredLength > 0 && declaredLength == actualMp4Length) {
                         notes.add("XMP 声明长度与实际尾部 MP4 字节长度完全一致")
                     } else if (declaredLength > 0) {
-                        notes.add("XMP 声明长度 ($declaredLength) 与 ftyp 实际长度 ($actualMp4Length) 存在差异")
+                        notes.add("警告：XMP 声明长度 ($declaredLength) 与实际 MP4 长度 ($actualMp4Length) 不一致，可一键修复")
+                    } else {
+                        notes.add("警告：存在内嵌 MP4 但缺少 Container:Directory 长度声明，可一键修复")
                     }
                 } else {
                     outVideo.delete()
@@ -174,19 +188,23 @@ object MotionPhotoInspector {
 
             if (fileName.endsWith("MP.jpg", ignoreCase = true) || fileName.endsWith("MP.jpeg", ignoreCase = true)) {
                 notes.add("文件名符合 Android Motion Photo 1.0 官方 *MP.jpg 规范")
-            } else {
-                notes.add("提示：文件名未以 MP.jpg 结尾，部分原生相册可能忽略实况标记")
+            } else if (extractedVideo != null) {
+                notes.add("提示：文件名未以 MP.jpg 结尾，点击「一键修复并重导出」可自动补全规范命名")
             }
 
             val isValid = (motionPhotoFlag == 1 || microVideoFlag == 1 || standards.isNotEmpty()) &&
-                extractedVideo != null
+                extractedVideo != null &&
+                (declaredLength == 0L || declaredLength == actualMp4Length)
+
+            val canRepair = extractedVideo != null
 
             Result.success(
                 InspectionReport(
                     fileName = fileName,
                     totalFileSize = totalSize,
                     isValidMotionPhoto = isValid,
-                    detectedStandards = if (standards.isEmpty() && extractedVideo != null) listOf("内嵌 MP4 容器") else standards,
+                    canBeRepaired = canRepair,
+                    detectedStandards = if (standards.isEmpty() && extractedVideo != null) listOf("内嵌 MP4 (待修复 XMP)") else standards,
                     hasXmpPacket = rawXmp != null,
                     rawXmpSnippet = rawXmp?.trim() ?: "",
                     motionPhotoFlag = motionPhotoFlag,
@@ -205,6 +223,204 @@ object MotionPhotoInspector {
             )
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    /**
+     * 开源功能 1 (libmphoto / live-photo-extract)：将实况照片中的内嵌 MP4 独立无损导出至系统相册 Movies/MotionStudio
+     */
+    suspend fun exportEmbeddedVideoToGallery(
+        context: Context,
+        report: InspectionReport
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val videoFile = report.extractedVideoFile
+                ?: return@withContext Result.failure(IllegalStateException("该照片不含可导出的内嵌视频流"))
+            if (!videoFile.exists()) {
+                return@withContext Result.failure(IllegalStateException("临时视频缓存已失效，请重新检验"))
+            }
+
+            val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            val outName = "VID_${sdf.format(Date())}_extracted.mp4"
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, outName)
+                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/MotionStudio")
+                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                }
+            }
+            val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return@withContext Result.failure(IllegalStateException("无法创建相册视频条目"))
+
+            resolver.openOutputStream(uri)?.use { out ->
+                FileInputStream(videoFile).use { it.copyTo(out) }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val done = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
+                resolver.update(uri, done, null, null)
+            }
+            Result.success("Movies/MotionStudio/$outName")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 开源功能 2 (libmphoto / live-photo-extract)：剥离尾部视频，将纯净高清静态 JPG 导出至 Pictures/MotionStudio
+     */
+    suspend fun exportStillImageToGallery(
+        context: Context,
+        sourceUriOrFile: Any,
+        report: InspectionReport
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val tempSource = copySourceToTemp(context, sourceUriOrFile)
+                ?: return@withContext Result.failure(IllegalArgumentException("无法读取源文件"))
+
+            val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            val outName = "IMG_${sdf.format(Date())}_still.jpg"
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, outName)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/MotionStudio")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return@withContext Result.failure(IllegalStateException("无法创建相册图片条目"))
+
+            val bytesToCopy = report.jpegPortionSize.coerceAtMost(tempSource.length())
+            resolver.openOutputStream(uri)?.use { out ->
+                FileInputStream(tempSource).use { input ->
+                    val buf = ByteArray(16 * 1024)
+                    var remaining = bytesToCopy
+                    while (remaining > 0) {
+                        val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                        val read = input.read(buf, 0, toRead)
+                        if (read <= 0) break
+                        out.write(buf, 0, read)
+                        remaining -= read
+                    }
+                }
+            }
+            tempSource.delete()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                resolver.update(uri, done, null, null)
+            }
+            Result.success("Pictures/MotionStudio/$outName")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 开源功能 3 (wszqkzqk/live-photo-conv live-photo-repair)：
+     * 一键修复损坏或无法被系统相册识别的实况照片（重新校准尾部 MP4 偏移、重写全品牌通用 XMP 并存入 DCIM/Camera）
+     */
+    suspend fun repairMotionPhotoToGallery(
+        context: Context,
+        sourceUriOrFile: Any,
+        report: InspectionReport
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val videoFile = report.extractedVideoFile
+                ?: return@withContext Result.failure(IllegalStateException("未检测到内嵌 MP4 视频流，无法修复"))
+            val tempSource = copySourceToTemp(context, sourceUriOrFile)
+                ?: return@withContext Result.failure(IllegalArgumentException("无法读取源文件"))
+
+            // 1. 截取纯净 JPEG 头部
+            val pureJpeg = File(context.cacheDir, "repair_head_${System.currentTimeMillis()}.jpg")
+            FileInputStream(tempSource).use { input ->
+                FileOutputStream(pureJpeg).use { out ->
+                    val buf = ByteArray(16 * 1024)
+                    var remaining = report.jpegPortionSize.coerceAtMost(tempSource.length())
+                    while (remaining > 0) {
+                        val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                        val read = input.read(buf, 0, toRead)
+                        if (read <= 0) break
+                        out.write(buf, 0, read)
+                        remaining -= read
+                    }
+                }
+            }
+            tempSource.delete()
+
+            // 2. 重新生成全品牌兼容 XMP 并注入
+            val xmpPacket = XmpMetadataWriter.createXmpPacket(
+                format = MotionPhotoBuilder.OutputFormat.UNIVERSAL,
+                videoLength = videoFile.length(),
+                presentationTimestampUs = if (report.presentationTimestampUs >= 0) report.presentationTimestampUs else 500_000L,
+                videoDurationMs = 2500L,
+                videoMimeType = "video/mp4"
+            )
+            val jpegWithXmp = File(context.cacheDir, "repair_xmp_${System.currentTimeMillis()}.jpg")
+            XmpMetadataWriter.injectXmpIntoJpeg(pureJpeg, xmpPacket, jpegWithXmp)
+            pureJpeg.delete()
+
+            // 3. 拼接并保存至系统相册 DCIM/Camera
+            val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            val outName = "MVIMG_${sdf.format(Date())}_REPAIRED.MP.jpg"
+            val appOutDir = File(context.getExternalFilesDir(null), "MotionPhotos").apply {
+                if (!exists()) mkdirs()
+            }
+            val repairedFile = File(appOutDir, outName)
+            FileOutputStream(repairedFile).use { out ->
+                FileInputStream(jpegWithXmp).use { it.copyTo(out) }
+                FileInputStream(videoFile).use { it.copyTo(out) }
+            }
+            jpegWithXmp.delete()
+
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, outName)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_DCIM}/Camera")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            if (uri != null) {
+                resolver.openOutputStream(uri)?.use { out ->
+                    FileInputStream(repairedFile).use { it.copyTo(out) }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                    resolver.update(uri, done, null, null)
+                }
+            }
+
+            Result.success("DCIM/Camera/$outName")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun copySourceToTemp(context: Context, sourceUriOrFile: Any): File? {
+        return try {
+            val temp = File(context.cacheDir, "demux_src_${System.currentTimeMillis()}.jpg")
+            when (sourceUriOrFile) {
+                is File -> {
+                    if (!sourceUriOrFile.exists()) return null
+                    sourceUriOrFile.copyTo(temp, overwrite = true)
+                    temp
+                }
+                is Uri -> {
+                    context.contentResolver.openInputStream(sourceUriOrFile)?.use { input ->
+                        FileOutputStream(temp).use { out -> input.copyTo(out) }
+                    } ?: return null
+                    temp
+                }
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 

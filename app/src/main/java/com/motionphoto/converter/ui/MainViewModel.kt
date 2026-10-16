@@ -3,6 +3,7 @@ package com.motionphoto.converter.ui
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.motionphoto.converter.core.MotionPhotoBuilder
@@ -22,21 +23,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val motionPhotoBuilder = MotionPhotoBuilder(application)
 
-    // 主题与视觉个性化状态
     data class ThemeSettings(
         val palette: ExpressivePalette = ExpressivePalette.IRIS_VIOLET,
-        val darkModeOverride: Boolean? = null, // null = 跟随系统
+        val darkModeOverride: Boolean? = null,
         val useDynamicColor: Boolean = false
     )
 
     private val _themeSettings = MutableStateFlow(ThemeSettings())
     val themeSettings: StateFlow<ThemeSettings> = _themeSettings.asStateFlow()
 
-    // 当前底部悬浮导航栏 Tab
     private val _currentTab = MutableStateFlow(AppTab.STUDIO)
     val currentTab: StateFlow<AppTab> = _currentTab.asStateFlow()
 
-    // 创作工坊主状态
+    private val _statusBannerMessage = MutableStateFlow<String?>(null)
+    val statusBannerMessage: StateFlow<String?> = _statusBannerMessage.asStateFlow()
+
     sealed class StudioState {
         object Idle : StudioState()
 
@@ -51,6 +52,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val includeAudio: Boolean = true,
             val jpegQuality: Int = 95,
             val selectedFormat: MotionPhotoBuilder.OutputFormat = MotionPhotoBuilder.OutputFormat.UNIVERSAL,
+            val customCoverImageUri: Uri? = null,
+            val customCoverName: String? = null,
+            val referenceExifImageUri: Uri? = null,
+            val referenceExifName: String? = null,
+            val longExposureMode: MotionPhotoBuilder.LongExposureMode = MotionPhotoBuilder.LongExposureMode.NONE,
+            val coverFilter: MotionPhotoBuilder.CoverFilter = MotionPhotoBuilder.CoverFilter.ORIGINAL,
+            val watermarkEnabled: Boolean = false,
             val isLoadingThumbnails: Boolean = true
         ) : StudioState()
 
@@ -58,11 +66,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val progress: Float,
             val stage: MotionPhotoBuilder.ConversionProgress.Stage,
             val detailMessage: String,
-            val format: MotionPhotoBuilder.OutputFormat
+            val format: MotionPhotoBuilder.OutputFormat,
+            val batchInfo: String? = null
         ) : StudioState()
 
         data class Success(
-            val result: MotionPhotoBuilder.ConversionResult
+            val result: MotionPhotoBuilder.ConversionResult,
+            val batchCount: Int = 1
         ) : StudioState()
 
         data class Error(
@@ -74,13 +84,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _studioState = MutableStateFlow<StudioState>(StudioState.Idle)
     val studioState: StateFlow<StudioState> = _studioState.asStateFlow()
 
-    // 实况检验器状态
     sealed class InspectorState {
         object Idle : InspectorState()
         object Inspecting : InspectorState()
         data class ResultReady(
             val sourceUriOrFile: Any,
-            val report: MotionPhotoInspector.InspectionReport
+            val report: MotionPhotoInspector.InspectionReport,
+            val actionFeedback: String? = null
         ) : InspectorState()
         data class Error(val message: String) : InspectorState()
     }
@@ -88,7 +98,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _inspectorState = MutableStateFlow<InspectorState>(InspectorState.Idle)
     val inspectorState: StateFlow<InspectorState> = _inspectorState.asStateFlow()
 
-    // 历史转换作品列表
     private val _historyFiles = MutableStateFlow<List<File>>(emptyList())
     val historyFiles: StateFlow<List<File>> = _historyFiles.asStateFlow()
 
@@ -96,6 +105,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshHistoryFiles()
+    }
+
+    fun showBannerMessage(msg: String) {
+        viewModelScope.launch {
+            _statusBannerMessage.value = msg
+            delay(3200)
+            if (_statusBannerMessage.value == msg) {
+                _statusBannerMessage.value = null
+            }
+        }
     }
 
     fun selectTab(tab: AppTab) {
@@ -124,16 +143,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * 选择源视频并加载元数据、首帧预览及 8 帧胶片时间轴
-     */
-    fun selectVideo(uri: Uri) {
+    fun selectVideo(uri: Uri, pendingCustomCoverUri: Uri? = null) {
         _currentTab.value = AppTab.STUDIO
         viewModelScope.launch {
             try {
                 val metadata = motionPhotoBuilder.inspectVideoMetadata(uri)
                 val initialTrimEnd = metadata.durationMs
-                // 默认选取视频黄金前 1/4 处或 0ms 作为初始封面帧
                 val defaultCoverUs = (metadata.durationMs.coerceAtMost(2000L) / 4L) * 1000L
                 val initialCover = motionPhotoBuilder.extractPreviewFrame(uri, defaultCoverUs)
 
@@ -145,11 +160,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     trimStartMs = 0L,
                     trimEndMs = initialTrimEnd,
                     includeAudio = metadata.hasAudio,
+                    customCoverImageUri = pendingCustomCoverUri,
+                    customCoverName = pendingCustomCoverUri?.let { queryFileName(it) },
                     isLoadingThumbnails = true
                 )
                 _studioState.value = editingState
 
-                // 异步加载时间轴缩略图条
                 val thumbs = motionPhotoBuilder.extractTimelineThumbnails(
                     videoUri = uri,
                     durationMs = metadata.durationMs,
@@ -172,30 +188,88 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 更新封面帧时间戳（带防抖实时解码预览帧）
+     * 批量多视频一键转实况队列 (Batch Queue)
      */
+    fun startBatchConversion(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        if (uris.size == 1) {
+            selectVideo(uris.first())
+            return
+        }
+        _currentTab.value = AppTab.STUDIO
+        viewModelScope.launch {
+            var lastSuccess: MotionPhotoBuilder.ConversionResult? = null
+            var successCount = 0
+
+            uris.forEachIndexed { idx, uri ->
+                val batchLabel = "批量队列 (${idx + 1} / ${uris.size})"
+                _studioState.value = StudioState.Converting(
+                    progress = idx.toFloat() / uris.size.toFloat(),
+                    stage = MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_FRAME,
+                    detailMessage = "$batchLabel：正在解析视频轨道...",
+                    format = MotionPhotoBuilder.OutputFormat.UNIVERSAL,
+                    batchInfo = batchLabel
+                )
+
+                val meta = try {
+                    motionPhotoBuilder.inspectVideoMetadata(uri)
+                } catch (_: Exception) {
+                    null
+                }
+                val defaultCoverUs = ((meta?.durationMs ?: 2000L).coerceAtMost(2000L) / 4L) * 1000L
+
+                val config = MotionPhotoBuilder.ConversionConfig(
+                    frameTimeUs = defaultCoverUs,
+                    format = MotionPhotoBuilder.OutputFormat.UNIVERSAL,
+                    saveToSystemGallery = true
+                )
+
+                motionPhotoBuilder.convertVideoToMotionPhoto(
+                    videoUri = uri,
+                    config = config,
+                    onProgress = { prog ->
+                        val overall = (idx + prog.progress) / uris.size.toFloat()
+                        _studioState.value = StudioState.Converting(
+                            progress = overall,
+                            stage = prog.stage,
+                            detailMessage = "$batchLabel · ${prog.detailMessage}",
+                            format = MotionPhotoBuilder.OutputFormat.UNIVERSAL,
+                            batchInfo = batchLabel
+                        )
+                    }
+                ).onSuccess { res ->
+                    lastSuccess = res
+                    successCount++
+                }
+            }
+
+            refreshHistoryFiles()
+            val finalResult = lastSuccess
+            if (finalResult != null) {
+                showBannerMessage("批量合成完成！共成功导出 $successCount 张实况照片至系统相册")
+                _studioState.value = StudioState.Success(
+                    result = finalResult,
+                    batchCount = successCount
+                )
+            } else {
+                _studioState.value = StudioState.Error("批量转换失败，请检查所选视频格式")
+            }
+        }
+    }
+
     fun updateCoverFrameTime(timeUs: Long) {
         val current = _studioState.value as? StudioState.Editing ?: return
         val clampedUs = timeUs.coerceIn(
             current.trimStartMs * 1000L,
             current.trimEndMs * 1000L
         )
-        _studioState.value = current.copy(coverTimeUs = clampedUs)
-
-        framePreviewJob?.cancel()
-        framePreviewJob = viewModelScope.launch {
-            delay(90)
-            val bitmap = motionPhotoBuilder.extractPreviewFrame(current.videoUri, clampedUs)
-            val latest = _studioState.value
-            if (latest is StudioState.Editing && latest.videoUri == current.videoUri && bitmap != null) {
-                _studioState.value = latest.copy(coverPreviewBitmap = bitmap)
-            }
-        }
+        _studioState.value = current.copy(
+            coverTimeUs = clampedUs,
+            longExposureMode = MotionPhotoBuilder.LongExposureMode.NONE
+        )
+        refreshCoverPreviewDebounced()
     }
 
-    /**
-     * 更新视频裁剪起止区间 (毫秒)
-     */
     fun updateTrimRange(startMs: Long, endMs: Long) {
         val current = _studioState.value as? StudioState.Editing ?: return
         val validStart = startMs.coerceIn(0L, (current.metadata.durationMs - 300L).coerceAtLeast(0L))
@@ -224,9 +298,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _studioState.value = current.copy(selectedFormat = format)
     }
 
-    /**
-     * 启动 Motion Photo 合成流程
-     */
+    fun setCustomCoverImage(uri: Uri?) {
+        val current = _studioState.value as? StudioState.Editing ?: return
+        val name = uri?.let { queryFileName(it) }
+        _studioState.value = current.copy(
+            customCoverImageUri = uri,
+            customCoverName = name
+        )
+        if (uri != null) {
+            showBannerMessage("已启用图影混流：使用外部高清图 $name 作为实况主图")
+        }
+    }
+
+    fun setReferenceExifImage(uri: Uri?) {
+        val current = _studioState.value as? StudioState.Editing ?: return
+        val name = uri?.let { queryFileName(it) }
+        _studioState.value = current.copy(
+            referenceExifImageUri = uri,
+            referenceExifName = name
+        )
+        if (uri != null) {
+            showBannerMessage("已载入 EXIF 样张：$name（合成时将自动克隆其相机参数）")
+        }
+    }
+
+    fun updateLongExposureMode(mode: MotionPhotoBuilder.LongExposureMode) {
+        val current = _studioState.value as? StudioState.Editing ?: return
+        _studioState.value = current.copy(longExposureMode = mode)
+        refreshCoverPreviewDebounced()
+    }
+
+    fun updateCoverFilter(filter: MotionPhotoBuilder.CoverFilter) {
+        val current = _studioState.value as? StudioState.Editing ?: return
+        _studioState.value = current.copy(coverFilter = filter)
+        refreshCoverPreviewDebounced()
+    }
+
+    fun updateWatermarkEnabled(enabled: Boolean) {
+        val current = _studioState.value as? StudioState.Editing ?: return
+        _studioState.value = current.copy(watermarkEnabled = enabled)
+    }
+
+    private fun refreshCoverPreviewDebounced() {
+        val current = _studioState.value as? StudioState.Editing ?: return
+        framePreviewJob?.cancel()
+        framePreviewJob = viewModelScope.launch {
+            delay(85)
+            val bitmap = motionPhotoBuilder.extractPreviewFrame(
+                videoUri = current.videoUri,
+                timeUs = current.coverTimeUs,
+                filter = current.coverFilter,
+                longExposureMode = current.longExposureMode,
+                trimStartMs = current.trimStartMs,
+                trimEndMs = current.trimEndMs
+            )
+            val latest = _studioState.value
+            if (latest is StudioState.Editing && latest.videoUri == current.videoUri && bitmap != null) {
+                _studioState.value = latest.copy(coverPreviewBitmap = bitmap)
+            }
+        }
+    }
+
     fun startConversion() {
         val editing = _studioState.value as? StudioState.Editing ?: return
         val config = MotionPhotoBuilder.ConversionConfig(
@@ -236,6 +368,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             includeAudio = editing.includeAudio,
             jpegQuality = editing.jpegQuality,
             format = editing.selectedFormat,
+            customCoverImageUri = editing.customCoverImageUri,
+            referenceExifImageUri = editing.referenceExifImageUri,
+            longExposureMode = editing.longExposureMode,
+            coverFilter = editing.coverFilter,
+            watermarkEnabled = editing.watermarkEnabled,
             saveToSystemGallery = true
         )
 
@@ -277,9 +414,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _studioState.value = StudioState.Idle
     }
 
-    /**
-     * 在「实况检验器」中检验任意图片 Uri 或本地文件
-     */
     fun inspectMotionPhotoUri(uri: Uri) {
         _currentTab.value = AppTab.INSPECTOR
         viewModelScope.launch {
@@ -310,6 +444,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun exportInspectedVideo() {
+        val current = _inspectorState.value as? InspectorState.ResultReady ?: return
+        viewModelScope.launch {
+            MotionPhotoInspector.exportEmbeddedVideoToGallery(getApplication(), current.report).fold(
+                onSuccess = { path ->
+                    val msg = "已无损提取内嵌 MP4 视频至系统相册：$path"
+                    showBannerMessage(msg)
+                    _inspectorState.value = current.copy(actionFeedback = msg)
+                },
+                onFailure = { err ->
+                    showBannerMessage("导出视频失败：${err.localizedMessage}")
+                }
+            )
+        }
+    }
+
+    fun exportInspectedStill() {
+        val current = _inspectorState.value as? InspectorState.ResultReady ?: return
+        viewModelScope.launch {
+            MotionPhotoInspector.exportStillImageToGallery(
+                getApplication(),
+                current.sourceUriOrFile,
+                current.report
+            ).fold(
+                onSuccess = { path ->
+                    val msg = "已提取纯净静态 JPG 主图至系统相册：$path"
+                    showBannerMessage(msg)
+                    _inspectorState.value = current.copy(actionFeedback = msg)
+                },
+                onFailure = { err ->
+                    showBannerMessage("导出静态图失败：${err.localizedMessage}")
+                }
+            )
+        }
+    }
+
+    fun repairInspectedMotionPhoto() {
+        val current = _inspectorState.value as? InspectorState.ResultReady ?: return
+        viewModelScope.launch {
+            MotionPhotoInspector.repairMotionPhotoToGallery(
+                getApplication(),
+                current.sourceUriOrFile,
+                current.report
+            ).fold(
+                onSuccess = { path ->
+                    refreshHistoryFiles()
+                    val msg = "修复成功！已重建全兼容 XMP 并保存至：$path"
+                    showBannerMessage(msg)
+                    _inspectorState.value = current.copy(actionFeedback = msg)
+                },
+                onFailure = { err ->
+                    showBannerMessage("修复失败：${err.localizedMessage}")
+                }
+            )
+        }
+    }
+
     fun refreshHistoryFiles() {
         viewModelScope.launch {
             val dir = File(getApplication<Application>().getExternalFilesDir(null), "MotionPhotos")
@@ -326,6 +517,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 file.delete()
                 refreshHistoryFiles()
             } catch (_: Exception) {}
+        }
+    }
+
+    private fun queryFileName(uri: Uri): String {
+        return try {
+            getApplication<Application>().contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+            } ?: "selected_media"
+        } catch (_: Exception) {
+            "selected_media"
         }
     }
 }
