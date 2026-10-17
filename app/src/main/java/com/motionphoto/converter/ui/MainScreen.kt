@@ -54,7 +54,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CameraEnhance
 import androidx.compose.material.icons.filled.Check
@@ -411,8 +410,8 @@ private fun ExpressiveTopBar(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Surface(
-                modifier = Modifier.size(44.dp),
-                shape = RoundedCornerShape(15.dp),
+                modifier = Modifier.size(42.dp),
+                shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.primaryContainer
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -420,40 +419,24 @@ private fun ExpressiveTopBar(
                         imageVector = Icons.Default.MotionPhotosOn,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(25.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
 
             Column {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Motion Studio",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.tertiaryContainer
-                    ) {
-                        Text(
-                            text = "黑白君定制版",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
-                }
+                Text(
+                    text = "实况照片",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
                 Text(
                     text = when (currentTab) {
-                        AppTab.STUDIO -> "极简一键合成 · 支持展开专业精修"
-                        AppTab.INSPECTOR -> "XMP 检验 · 无损拆解 MP4/JPG · 一键修复"
-                        AppTab.GALLERY -> "本机已生成实况作品库"
-                        AppTab.ABOUT -> "关于作者 · 黑白君 (抖音: heibaijunbenjun)"
+                        AppTab.STUDIO -> "视频转动态照片"
+                        AppTab.INSPECTOR -> "查看信息与提取视频"
+                        AppTab.GALLERY -> "历史记录"
+                        AppTab.ABOUT -> "关于"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -475,7 +458,7 @@ private fun ExpressiveTopBar(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Default.Palette,
-                        contentDescription = "主题色彩",
+                        contentDescription = "主题配色",
                         tint = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier.size(19.dp)
                     )
@@ -502,10 +485,6 @@ private fun ExpressiveTopBar(
     }
 }
 
-/**
- * 关键性能优化：使用 contentKey = { it::class.simpleName }
- * 确保在 Editing 内部修改任何参数时绝不触发整页重绘或重建 ExoPlayer！
- */
 @Composable
 private fun StudioTabContent(
     state: MainViewModel.StudioState,
@@ -611,50 +590,38 @@ private fun StudioIdleHeroView(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(34.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+            shape = RoundedCornerShape(32.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.50f)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 22.dp, vertical = 26.dp),
+                    .padding(horizontal = 22.dp, vertical = 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 ExpressiveMorphingBadge(
-                    modifier = Modifier.size(144.dp),
+                    modifier = Modifier.size(136.dp),
                     lobes = 8f,
                     waveAmplitude = 0.10f,
                     isAnimating = false
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MotionPhotosOn,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "LIVE · 实况",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.MotionPhotosOn,
+                        contentDescription = null,
+                        modifier = Modifier.size(52.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
                 Text(
-                    text = "视频一键转实况照片",
+                    text = "视频转动态照片",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -664,22 +631,22 @@ private fun StudioIdleHeroView(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "零门槛傻瓜式操作：选好视频即可一键生成全品牌兼容的动态照片，自动存入系统相册；进阶玩家亦可展开图影混流、长曝光与滤镜工具。",
+                    text = "选择一段视频，自动生成可在手机相册中长按播放的动态照片。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(22.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(62.dp)
+                        .height(60.dp)
                         .expressiveBounceClick(pressedScale = 0.95f) {
                             onPickVideo()
                         },
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(22.dp),
                     color = MaterialTheme.colorScheme.primary
                 ) {
                     Row(
@@ -691,13 +658,13 @@ private fun StudioIdleHeroView(
                             imageVector = Icons.Default.VideoLibrary,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "选择一段视频开始制作",
+                            text = "选择视频",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold,
+                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimary
                         )
                     }
@@ -728,7 +695,7 @@ private fun StudioIdleHeroView(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "批量选择多段视频一键转实况",
+                            text = "批量选择视频",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -738,85 +705,10 @@ private fun StudioIdleHeroView(
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // 三步极简新手引导卡
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(26.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.40f)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                StepBadgeItem("1", "挑选视频", "从相册选一段视频")
-                StepBadgeItem("2", "选封面帧", "滑动定格最美瞬间")
-                StepBadgeItem("3", "一键保存", "自动存入系统相册")
-            }
-        }
-
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
-@Composable
-private fun StepBadgeItem(step: String, title: String, desc: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Surface(
-            modifier = Modifier.size(28.dp),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = step,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = desc,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun ExpressiveFeaturePill(
-    text: String,
-    containerColor: Color,
-    contentColor: Color
-) {
-    Surface(
-        shape = CircleShape,
-        color = containerColor
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelMedium,
-            color = contentColor,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-        )
-    }
-}
-
-/**
- * 极简默认 + 可折叠专业精修工作台 (120Hz 防卡顿优化版)
- * - 默认只显示「视频预览」「滑动选封面」「一键合成实况照片」，小白零认知负担
- * - 拖动滑块时仅更新本地 Float 状态并实时预览胶片缩略图，松手才触发高清帧解码，彻底告别卡顿
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StudioEditorView(
@@ -843,7 +735,6 @@ private fun StudioEditorView(
     var showAdvancedOptions by remember { mutableStateOf(false) }
     var showFormatSheet by remember { mutableStateOf(false) }
 
-    // 本地瞬时滑块状态：保证拖动滑块 120Hz 零卡顿，不触发全量 ViewModel 重组
     var localCoverTimeUs by remember(state.videoUri, state.coverTimeUs) {
         mutableFloatStateOf(state.coverTimeUs.toFloat())
     }
@@ -883,7 +774,6 @@ private fun StudioEditorView(
         }
     }
 
-    // 拖动滑块时，立即从已缓存的 8 帧缩略图中取最近的一帧用于 0 延迟反馈
     val displayedCoverBitmap: Bitmap? = if (isDraggingCoverSlider && state.timelineThumbnails.isNotEmpty()) {
         val ratio = (localCoverTimeUs / (state.metadata.durationMs * 1000f).coerceAtLeast(1f)).coerceIn(0f, 1f)
         val idx = (ratio * (state.timelineThumbnails.size - 1)).roundToInt()
@@ -900,17 +790,15 @@ private fun StudioEditorView(
             .padding(horizontal = 20.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. 顶部预览切换：动态视频 vs 静态封面
         ExpressiveConnectedButtonGroup(
             items = listOf("VIDEO", "COVER"),
             selectedItem = previewMode,
             onSelect = { mode -> previewMode = mode },
             labelProvider = { mode ->
-                if (mode == "VIDEO") "动态效果预览" else "静态封面预览"
+                if (mode == "VIDEO") "视频预览" else "封面预览"
             }
         )
 
-        // 2. 主预览视窗
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -947,14 +835,14 @@ private fun StudioEditorView(
                 if (state.customCoverImageUri != null) {
                     AsyncImage(
                         model = state.customCoverImageUri,
-                        contentDescription = "外部高清封面",
+                        contentDescription = "自定义封面",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else if (displayedCoverBitmap != null) {
                     Image(
                         bitmap = displayedCoverBitmap.asImageBitmap(),
-                        contentDescription = "封面帧预览",
+                        contentDescription = "封面预览",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -1000,22 +888,6 @@ private fun StudioEditorView(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = Color.Black.copy(alpha = 0.65f)
-                ) {
-                    Text(
-                        text = when {
-                            state.customCoverImageUri != null -> "外部高清主图"
-                            state.longExposureMode != MotionPhotoBuilder.LongExposureMode.NONE -> state.longExposureMode.title
-                            else -> "封面 @ ${(localCoverTimeUs / 1000f).toLong()} ms"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                    )
-                }
-
                 if (previewMode == "VIDEO") {
                     Surface(
                         modifier = Modifier
@@ -1037,7 +909,7 @@ private fun StudioEditorView(
             }
         }
 
-        // 3. 极简第 1 步：滑动挑选封面瞬间
+        // 封面帧位置滑块
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(26.dp),
@@ -1049,33 +921,16 @@ private fun StudioEditorView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CameraEnhance,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(19.dp)
-                        )
-                        Text(
-                            text = "挑选封面帧（不滑则使用默认最佳帧）",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            text = String.format("%.2f 秒", localCoverTimeUs / 1_000_000f),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
-                        )
-                    }
+                    Text(
+                        text = "封面位置",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = String.format("%.2f 秒", localCoverTimeUs / 1_000_000f),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -1131,7 +986,7 @@ private fun StudioEditorView(
             }
         }
 
-        // 4. 极简主操作按钮（放在最显眼位置，小白无需往下翻即可一键完成！）
+        // 主操作按钮
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1140,8 +995,8 @@ private fun StudioEditorView(
                 onClick = onCancel,
                 modifier = Modifier
                     .weight(0.32f)
-                    .height(58.dp),
-                shape = RoundedCornerShape(22.dp)
+                    .height(56.dp),
+                shape = RoundedCornerShape(20.dp)
             ) {
                 Text(
                     text = "重选",
@@ -1153,11 +1008,11 @@ private fun StudioEditorView(
             Surface(
                 modifier = Modifier
                     .weight(0.68f)
-                    .height(58.dp)
+                    .height(56.dp)
                     .expressiveBounceClick(pressedScale = 0.95f) {
                         onStartConvert()
                     },
-                shape = RoundedCornerShape(22.dp),
+                shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.primary
             ) {
                 Row(
@@ -1165,31 +1020,25 @@ private fun StudioEditorView(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "一键生成实况照片",
+                        text = "生成动态照片",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimary
                     )
                 }
             }
         }
 
-        // 5. 可折叠「高级精修选项 (Pro)」抽屉（默认收起，界面清爽不懵圈！）
+        // 更多设置折叠栏（默认收起）
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .expressiveBounceClick(pressedScale = 0.98f) {
                     showAdvancedOptions = !showAdvancedOptions
                 },
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
         ) {
             Row(
                 modifier = Modifier
@@ -1205,27 +1054,26 @@ private fun StudioEditorView(
                     Icon(
                         imageVector = Icons.Default.Tune,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.size(20.dp)
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
                     )
                     Column {
                         Text(
-                            text = if (showAdvancedOptions) "收起高级创作选项 (Pro)" else "展开高级创作选项 (Pro · 选填)",
+                            text = "更多设置",
                             style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                            fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "默认已自动开启：${state.selectedFormat.displayName} · 保留原声 · 95% 高画质",
+                            text = "截取片段、替换封面、滤镜、相册兼容模式",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
                 Icon(
                     imageVector = if (showAdvancedOptions) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -1239,7 +1087,6 @@ private fun StudioEditorView(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // 进阶卡片 A：片段裁剪与原声/画质
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(26.dp),
@@ -1265,7 +1112,7 @@ private fun StudioEditorView(
                                     modifier = Modifier.size(19.dp)
                                 )
                                 Text(
-                                    text = "视频片段截取",
+                                    text = "截取片段",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -1307,7 +1154,7 @@ private fun StudioEditorView(
                                     tint = MaterialTheme.colorScheme.secondary
                                 )
                                 Text(
-                                    text = "保留视频原声 (AAC)",
+                                    text = "保留视频声音",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -1320,7 +1167,7 @@ private fun StudioEditorView(
 
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = "主图 JPEG 编码品质",
+                                text = "封面图片质量",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1330,9 +1177,9 @@ private fun StudioEditorView(
                                 onSelect = onUpdateQuality,
                                 labelProvider = { q ->
                                     when (q) {
-                                        88 -> "轻量 88%"
-                                        95 -> "高画质 95%"
-                                        else -> "无损级 100%"
+                                        88 -> "标准"
+                                        95 -> "高清"
+                                        else -> "原画"
                                     }
                                 }
                             )
@@ -1340,7 +1187,6 @@ private fun StudioEditorView(
                     }
                 }
 
-                // 进阶卡片 B：开源特色玩法（图影混流 / 长曝光 / 滤镜 / 水印 / 样张 EXIF 克隆）
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(26.dp),
@@ -1351,9 +1197,9 @@ private fun StudioEditorView(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "进阶玩法：换高清封面 · 长曝光 · 滤镜水印",
+                            text = "封面与画面效果",
                             style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.ExtraBold
+                            fontWeight = FontWeight.Bold
                         )
 
                         Row(
@@ -1363,13 +1209,13 @@ private fun StudioEditorView(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "外部高清封面混流 (Photo + Video)",
+                                    text = "替换封面图",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = state.customCoverName?.let { "已选：$it" }
-                                        ?: "任选相册高清照片替代视频帧作为实况封面",
+                                        ?: "从相册选一张照片作为封面",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1387,7 +1233,7 @@ private fun StudioEditorView(
                                     },
                                     shape = RoundedCornerShape(14.dp)
                                 ) {
-                                    Text("选外部照片")
+                                    Text("选择照片")
                                 }
                             }
                         }
@@ -1399,13 +1245,13 @@ private fun StudioEditorView(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "克隆本机相机样张 EXIF",
+                                    text = "导入相机参数",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = state.referenceExifName?.let { "已克隆：$it" }
-                                        ?: "从本机实拍照片复制镜头与机型参数",
+                                    text = state.referenceExifName?.let { "已选：$it" }
+                                        ?: "从本机拍的照片复制机型信息，提高相册识别率",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1417,14 +1263,14 @@ private fun StudioEditorView(
                                 }
                             } else {
                                 FilledTonalButton(onClick = onPickReferenceExif, shape = RoundedCornerShape(14.dp)) {
-                                    Text("选本机样张")
+                                    Text("选择样张")
                                 }
                             }
                         }
 
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = "动态长曝光堆栈封面",
+                                text = "封面效果",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1441,7 +1287,7 @@ private fun StudioEditorView(
 
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = "封面色彩滤镜",
+                                text = "滤镜",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1462,7 +1308,7 @@ private fun StudioEditorView(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "叠加底部光学机型铭牌水印",
+                                text = "底部相机水印",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -1474,7 +1320,6 @@ private fun StudioEditorView(
                     }
                 }
 
-                // 进阶卡片 C：目标厂商 XMP 协议切换
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1491,13 +1336,13 @@ private fun StudioEditorView(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "目标手机相册 XMP 协议：${state.selectedFormat.displayName}",
+                                text = "兼容模式：${state.selectedFormat.displayName}",
                                 style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.ExtraBold,
+                                fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
-                                text = state.selectedFormat.description,
+                                text = state.selectedFormat.subtitle,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                             )
@@ -1508,7 +1353,7 @@ private fun StudioEditorView(
                             color = MaterialTheme.colorScheme.surface
                         ) {
                             Text(
-                                text = "切换",
+                                text = "更改",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
@@ -1535,9 +1380,9 @@ private fun StudioEditorView(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "选择目标设备 XMP 实况格式",
+                    text = "选择兼容模式",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold
+                    fontWeight = FontWeight.Bold
                 )
                 MotionPhotoBuilder.OutputFormat.values().forEach { fmt ->
                     val selected = fmt == state.selectedFormat
@@ -1563,12 +1408,12 @@ private fun StudioEditorView(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "${fmt.displayName} (${fmt.badge})",
+                                    text = fmt.displayName,
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = fmt.description,
+                                    text = fmt.subtitle,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1604,28 +1449,21 @@ private fun StudioConvertingView(
         verticalArrangement = Arrangement.Center
     ) {
         Box(
-            modifier = Modifier.size(210.dp),
+            modifier = Modifier.size(200.dp),
             contentAlignment = Alignment.Center
         ) {
             ExpressiveMorphingBadge(
-                modifier = Modifier.size(156.dp),
-                lobes = 10f,
-                waveAmplitude = 0.11f,
+                modifier = Modifier.size(148.dp),
+                lobes = 8f,
+                waveAmplitude = 0.10f,
                 isAnimating = true
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "${(progress * 100).toInt()}%",
-                        style = MaterialTheme.typography.headlineLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        text = format.filePrefix,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                    )
-                }
+                Text(
+                    text = "${(progress * 100).toInt()}%",
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
             }
 
             ExpressiveWavyCircularHalo(
@@ -1635,19 +1473,19 @@ private fun StudioConvertingView(
             )
         }
 
-        Spacer(modifier = Modifier.height(26.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(
             text = when (stage) {
-                MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_FRAME -> "正在处理高清封面并写入相机 EXIF"
-                MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_VIDEO -> "正在无损封装 MP4 动态轨道"
-                MotionPhotoBuilder.ConversionProgress.Stage.WRITING_METADATA -> "正在注入标准 XMP 容器目录"
-                MotionPhotoBuilder.ConversionProgress.Stage.COMBINING -> "正在拼接 JPEG 与尾部 MP4 流"
-                MotionPhotoBuilder.ConversionProgress.Stage.SAVING_TO_GALLERY -> "正在保存至系统相册 DCIM/Camera"
-                MotionPhotoBuilder.ConversionProgress.Stage.COMPLETE -> "实况照片合成完成！"
+                MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_FRAME -> "正在生成封面..."
+                MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_VIDEO -> "正在处理视频..."
+                MotionPhotoBuilder.ConversionProgress.Stage.WRITING_METADATA -> "正在写入信息..."
+                MotionPhotoBuilder.ConversionProgress.Stage.COMBINING -> "正在合成文件..."
+                MotionPhotoBuilder.ConversionProgress.Stage.SAVING_TO_GALLERY -> "正在保存到相册..."
+                MotionPhotoBuilder.ConversionProgress.Stage.COMPLETE -> "已完成"
             },
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.ExtraBold,
+            fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center
         )
 
@@ -1689,7 +1527,7 @@ private fun StudioSuccessView(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(28.dp),
+            shape = RoundedCornerShape(26.dp),
             color = MaterialTheme.colorScheme.primaryContainer
         ) {
             Row(
@@ -1700,7 +1538,7 @@ private fun StudioSuccessView(
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Surface(
-                    modifier = Modifier.size(48.dp),
+                    modifier = Modifier.size(44.dp),
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary
                 ) {
@@ -1709,23 +1547,23 @@ private fun StudioSuccessView(
                             imageVector = Icons.Default.Check,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(26.dp)
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (batchCount > 1) {
-                            "批量合成成功！共导出 $batchCount 张实况照片"
+                            "已保存 $batchCount 张动态照片到相册"
                         } else {
-                            "实况照片已保存至系统相册！"
+                            "已保存到相册"
                         },
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                     Text(
-                        text = "相册位置：${result.galleryDisplayPath}",
+                        text = result.galleryDisplayPath,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                     )
@@ -1733,7 +1571,6 @@ private fun StudioSuccessView(
             }
         }
 
-        // 默认静态显示封面，点击后按需启动 ExoPlayer，确保打开结果页瞬间丝滑不卡顿
         LiveMotionPhotoPlayerCard(
             coverImageModel = result.localFile,
             videoFileOrUri = result.localFile,
@@ -1755,7 +1592,7 @@ private fun StudioSuccessView(
             ) {
                 Icon(imageVector = Icons.Default.Verified, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("检验与拆解", fontWeight = FontWeight.Bold)
+                Text("查看详情", fontWeight = FontWeight.Bold)
             }
 
             Button(
@@ -1767,7 +1604,7 @@ private fun StudioSuccessView(
             ) {
                 Icon(imageVector = Icons.Default.Share, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("分享实况照片", fontWeight = FontWeight.Bold)
+                Text("分享", fontWeight = FontWeight.Bold)
             }
         }
 
@@ -1780,7 +1617,7 @@ private fun StudioSuccessView(
         ) {
             Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("继续制作下一张", fontWeight = FontWeight.Bold)
+            Text("继续制作", fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -1839,9 +1676,9 @@ private fun StudioErrorView(
         }
         Spacer(modifier = Modifier.height(20.dp))
         Text(
-            text = "合成遇到问题",
+            text = "生成失败",
             style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.ExtraBold
+            fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
@@ -1864,7 +1701,7 @@ private fun StudioErrorView(
                 modifier = Modifier.height(50.dp),
                 shape = RoundedCornerShape(18.dp)
             ) {
-                Text("重新选择视频")
+                Text("重试")
             }
         }
     }
@@ -1890,21 +1727,21 @@ private fun InspectorTabContent(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(30.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.50f)
         ) {
             Column(
                 modifier = Modifier.padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "实况检验 · 提取视频 · 修复",
+                    text = "照片解析与提取",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold
+                    fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "选择任意实况照片，可在此播放内部视频、单独提取 MP4 视频到相册，或一键修复无法识别的实况照片。",
+                    text = "选择一张动态照片，可单独保存其中的视频、静态图片，或修复相册无法识别的动态照片。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -1919,7 +1756,7 @@ private fun InspectorTabContent(
                 ) {
                     Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("从相册选择照片进行检验 / 提取", fontWeight = FontWeight.Bold)
+                    Text("选择照片", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1941,11 +1778,11 @@ private fun InspectorTabContent(
                             imageVector = Icons.Default.Verified,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-                            modifier = Modifier.size(44.dp)
+                            modifier = Modifier.size(40.dp)
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "尚未加载待检照片",
+                            text = "未选择照片",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -1984,7 +1821,7 @@ private fun InspectorTabContent(
 
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(26.dp),
+                    shape = RoundedCornerShape(24.dp),
                     color = if (report.isValidMotionPhoto) {
                         MaterialTheme.colorScheme.primaryContainer
                     } else {
@@ -2007,14 +1844,14 @@ private fun InspectorTabContent(
                             )
                             Text(
                                 text = if (report.isValidMotionPhoto) {
-                                    "检验通过：有效的 Android 实况照片"
+                                    "包含完整动态视频"
                                 } else if (report.canBeRepaired) {
-                                    "检测到内嵌视频（可一键修复 XMP）"
+                                    "包含视频，但信息不完整（可修复）"
                                 } else {
-                                    "普通静态 JPEG（不含内嵌视频流）"
+                                    "普通静态照片"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.ExtraBold
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
@@ -2031,19 +1868,13 @@ private fun InspectorTabContent(
 
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(26.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.50f)
                     ) {
                         Column(
-                            modifier = Modifier.padding(18.dp),
+                            modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text(
-                                text = "无损拆解导出 & 实况修复工具箱",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -2055,7 +1886,7 @@ private fun InspectorTabContent(
                                         .height(48.dp),
                                     shape = RoundedCornerShape(16.dp)
                                 ) {
-                                    Text("提取视频 (.mp4)", fontWeight = FontWeight.Bold)
+                                    Text("保存视频", fontWeight = FontWeight.Bold)
                                 }
 
                                 FilledTonalButton(
@@ -2065,7 +1896,7 @@ private fun InspectorTabContent(
                                         .height(48.dp),
                                     shape = RoundedCornerShape(16.dp)
                                 ) {
-                                    Text("提取主图 (.jpg)", fontWeight = FontWeight.Bold)
+                                    Text("保存图片", fontWeight = FontWeight.Bold)
                                 }
                             }
 
@@ -2078,7 +1909,7 @@ private fun InspectorTabContent(
                             ) {
                                 Icon(imageVector = Icons.Default.Build, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("一键修复 XMP 并重新保存至相册", fontWeight = FontWeight.Bold)
+                                Text("修复并重新保存到相册", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -2086,22 +1917,21 @@ private fun InspectorTabContent(
 
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(26.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "容器诊断指标",
+                            text = "文件信息",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
                         MetricRow("文件名", report.fileName)
-                        MetricRow("文件总大小", formatBytes(report.totalFileSize))
-                        MetricRow("内嵌 MP4 长度", formatBytes(report.actualMp4Length))
-                        MetricRow("封面帧时间戳", "${report.presentationTimestampUs} μs")
+                        MetricRow("总大小", formatBytes(report.totalFileSize))
+                        MetricRow("内嵌视频大小", formatBytes(report.actualMp4Length))
 
                         if (report.rawXmpSnippet.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(4.dp))
@@ -2112,7 +1942,7 @@ private fun InspectorTabContent(
                             ) {
                                 Icon(imageVector = Icons.Default.Code, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(if (showRawXmp) "收起 XMP 报文" else "查看 XMP 报文")
+                                Text(if (showRawXmp) "收起 XMP 信息" else "查看 XMP 信息")
                             }
 
                             AnimatedVisibility(visible = showRawXmp) {
@@ -2164,9 +1994,9 @@ private fun GalleryAndGuideTabContent(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
-            text = "本机已生成实况照片 (${historyFiles.size})",
+            text = "历史记录 (${historyFiles.size})",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.ExtraBold
+            fontWeight = FontWeight.Bold
         )
 
         if (historyFiles.isEmpty()) {
@@ -2189,7 +2019,7 @@ private fun GalleryAndGuideTabContent(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "暂无历史实况照片",
+                        text = "暂无记录",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -2198,7 +2028,7 @@ private fun GalleryAndGuideTabContent(
                         onClick = onPickVideo,
                         shape = RoundedCornerShape(18.dp)
                     ) {
-                        Text("立即去制作第一张实况照片")
+                        Text("去制作")
                     }
                 }
             }
@@ -2248,7 +2078,7 @@ private fun GalleryAndGuideTabContent(
                             IconButton(onClick = { onInspectFile(file) }) {
                                 Icon(
                                     imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = "播放检验",
+                                    contentDescription = "查看",
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                             }
@@ -2277,7 +2107,7 @@ private fun GalleryAndGuideTabContent(
 }
 
 /**
- * Tab 4：关于作者页面 (黑白君 · 抖音号 heibaijunbenjun · 专属抖音二维码展示与保存)
+ * Tab 4：关于页面 (黑白君 · 抖音号 heibaijunbenjun · 二维码)
  */
 @Composable
 private fun AboutAuthorTabContent(
@@ -2296,10 +2126,9 @@ private fun AboutAuthorTabContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. 作者个人品牌名片卡 (MD3 Expressive)
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(32.dp),
+            shape = RoundedCornerShape(30.dp),
             color = MaterialTheme.colorScheme.primaryContainer
         ) {
             Column(
@@ -2309,7 +2138,7 @@ private fun AboutAuthorTabContent(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Surface(
-                    modifier = Modifier.size(68.dp),
+                    modifier = Modifier.size(64.dp),
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary
                 ) {
@@ -2318,17 +2147,17 @@ private fun AboutAuthorTabContent(
                             imageVector = Icons.Default.Person,
                             contentDescription = "黑白君",
                             tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(34.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
                     text = "黑白君",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.ExtraBold,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
 
@@ -2347,17 +2176,8 @@ private fun AboutAuthorTabContent(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                Text(
-                    text = "“为共产主义而奋斗...”",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                )
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // 一键复制抖音号 + 保存二维码双按钮
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -2366,11 +2186,11 @@ private fun AboutAuthorTabContent(
                         onClick = {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             clipboard?.setPrimaryClip(ClipData.newPlainText("抖音号", "heibaijunbenjun"))
-                            onShowToast("已复制抖音号：heibaijunbenjun，快去抖音搜索关注吧！")
+                            onShowToast("已复制抖音号：heibaijunbenjun")
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .height(50.dp),
+                            .height(48.dp),
                         shape = RoundedCornerShape(18.dp)
                     ) {
                         Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -2383,15 +2203,15 @@ private fun AboutAuthorTabContent(
                             scope.launch {
                                 val savedPath = saveQrDrawableToGallery(context)
                                 if (savedPath != null) {
-                                    onShowToast("二维码已保存到相册：$savedPath")
+                                    onShowToast("已保存到相册：$savedPath")
                                 } else {
-                                    onShowToast("保存二维码失败，请检查相册权限")
+                                    onShowToast("保存失败，请检查相册权限")
                                 }
                             }
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .height(50.dp),
+                            .height(48.dp),
                         shape = RoundedCornerShape(18.dp)
                     ) {
                         Icon(imageVector = Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -2402,15 +2222,14 @@ private fun AboutAuthorTabContent(
             }
         }
 
-        // 2. 抖音扫码名片大图卡（点击可全屏放大）
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .expressiveBounceClick(pressedScale = 0.98f) {
                     showZoomQrDialog = true
                 },
-            shape = RoundedCornerShape(32.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            shape = RoundedCornerShape(30.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.50f)
         ) {
             Column(
                 modifier = Modifier
@@ -2429,7 +2248,7 @@ private fun AboutAuthorTabContent(
                         modifier = Modifier.size(20.dp)
                     )
                     Text(
-                        text = "抖音扫一扫关注「黑白君」（点击图片可全屏放大）",
+                        text = "打开抖音扫一扫",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -2439,7 +2258,7 @@ private fun AboutAuthorTabContent(
 
                 Image(
                     painter = painterResource(id = R.drawable.douyin_qr_heibaijun),
-                    contentDescription = "黑白君抖音二维码 (heibaijunbenjun)",
+                    contentDescription = "黑白君抖音二维码",
                     contentScale = ContentScale.FillWidth,
                     modifier = Modifier
                         .fillMaxWidth(0.86f)
@@ -2448,26 +2267,18 @@ private fun AboutAuthorTabContent(
             }
         }
 
-        // 3. 关于应用版本说明
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(26.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.40f)
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f)
         ) {
             Column(
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "关于 Motion Studio (黑白君定制版)",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.ExtraBold
-                )
-                MetricRow("当前版本", "v3.5.0-md3e-release (120Hz 丝滑优化版)")
-                MetricRow("作者 / 出品", "黑白君")
+                MetricRow("作者", "黑白君")
                 MetricRow("抖音号", "heibaijunbenjun")
-                MetricRow("设计语言", "Google Material 3 Expressive (MD3E)")
-                MetricRow("支持标准", "Google / 小米 / OPPO / 华为 / 三星全兼容")
+                MetricRow("版本", "1.2.0")
             }
         }
 
@@ -2485,7 +2296,7 @@ private fun AboutAuthorTabContent(
             ) {
                 Image(
                     painter = painterResource(id = R.drawable.douyin_qr_heibaijun),
-                    contentDescription = "黑白君抖音二维码大图",
+                    contentDescription = "黑白君抖音二维码",
                     contentScale = ContentScale.FillWidth,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2500,7 +2311,7 @@ private suspend fun saveQrDrawableToGallery(context: Context): String? = withCon
     try {
         val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.douyin_qr_heibaijun)
             ?: return@withContext null
-        val outName = "Douyin_Heibaijun_heibaijunbenjun_QR.jpg"
+        val outName = "Douyin_Heibaijun_QR.jpg"
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, outName)
@@ -2540,9 +2351,9 @@ private fun ThemeCustomizationSheet(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
-            text = "Material 3 Expressive 个性化色彩",
+            text = "主题配色",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.ExtraBold
+            fontWeight = FontWeight.Bold
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -2560,12 +2371,12 @@ private fun ThemeCustomizationSheet(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Material You 壁纸动态取色",
+                            text = "跟随系统壁纸颜色",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "跟随 Android 12–16 系统壁纸自动生成高对比度色板",
+                            text = "使用系统动态配色",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2603,7 +2414,7 @@ private fun ThemeCustomizationSheet(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(42.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
                             .background(
                                 Brush.linearGradient(
@@ -2616,11 +2427,6 @@ private fun ThemeCustomizationSheet(
                             text = palette.title,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = palette.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     if (selected) {
@@ -2658,7 +2464,7 @@ private fun shareMotionPhoto(context: Context, file: File) {
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "分享实况照片 (${file.name})"))
+        context.startActivity(Intent.createChooser(intent, "分享动态照片"))
     } catch (_: Exception) {
     }
 }

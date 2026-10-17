@@ -16,25 +16,25 @@ enum class ExpressivePalette(
     val accentPreview: Color
 ) {
     IRIS_VIOLET(
-        title = "流光紫韵",
+        title = "紫罗兰",
         subtitle = "MD3 Expressive 标志色",
         seedColor = Color(0xFF5B43D6),
         accentPreview = Color(0xFFFFB1C8)
     ),
     PIXEL_MINT(
-        title = "薄荷森境",
+        title = "薄荷绿",
         subtitle = "Pixel 灵动翠绿",
         seedColor = Color(0xFF006D43),
         accentPreview = Color(0xFF75F8B3)
     ),
     SUNSET_CORAL(
-        title = "暮光珊瑚",
+        title = "珊瑚橙",
         subtitle = "温暖高对比活力色",
         seedColor = Color(0xFF9C3D28),
         accentPreview = Color(0xFFFFB59D)
     ),
     CYBER_OCEAN(
-        title = "深海电光",
+        title = "深海蓝",
         subtitle = "清澈冰蓝科技感",
         seedColor = Color(0xFF006493),
         accentPreview = Color(0xFF8ECDFF)

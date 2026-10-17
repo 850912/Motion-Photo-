@@ -71,8 +71,8 @@ class MotionPhotoBuilder(private val context: Context) {
         val filePrefix: String
     ) {
         UNIVERSAL(
-            displayName = "全品牌通用格式",
-            badge = "推荐 · 全兼容",
+            displayName = "通用格式",
+            badge = "推荐",
             subtitle = "Google / 小米 / OPPO / vivo / 华为 / 三星",
             description = "同时注入 MotionPhoto 1.0 容器目录、MicroVideo 偏移量与 O-Live 多重元数据",
             makeTag = Build.MANUFACTURER.ifBlank { "Google" },
@@ -81,8 +81,8 @@ class MotionPhotoBuilder(private val context: Context) {
             filePrefix = "MVIMG"
         ),
         GOOGLE_STANDARD(
-            displayName = "Google Pixel 原生",
-            badge = "Android 16 标准",
+            displayName = "Google Pixel",
+            badge = "标准",
             subtitle = "Google 相册 / Pixel / 原生 Android",
             description = "严格遵循 Android Motion Photo 1.0 官方规范 (PXL_*MP.jpg)",
             makeTag = "Google",
@@ -91,8 +91,8 @@ class MotionPhotoBuilder(private val context: Context) {
             filePrefix = "PXL"
         ),
         XIAOMI_ENHANCED(
-            displayName = "小米澎湃 HyperOS",
-            badge = "小米 / Leica",
+            displayName = "小米 / Redmi",
+            badge = "小米",
             subtitle = "小米相册长按动态播放优化",
             description = "注入 GCamera:MicroVideo + MotionPhoto 双标签及小米徕卡相机 EXIF 标识",
             makeTag = "Xiaomi",
@@ -101,8 +101,8 @@ class MotionPhotoBuilder(private val context: Context) {
             filePrefix = "MVIMG"
         ),
         OPPO_OLIVE(
-            displayName = "OPPO / 一加 O-Live",
-            badge = "ColorOS / 哈苏",
+            displayName = "OPPO / 一加",
+            badge = "OPPO",
             subtitle = "OPPO / OnePlus / Realme 相册实况",
             description = "包含 OpCamera O-Live Photo v2 专有命名空间与双时间戳同步",
             makeTag = "OPPO",
@@ -111,8 +111,8 @@ class MotionPhotoBuilder(private val context: Context) {
             filePrefix = "IMG"
         ),
         HUAWEI_COMPATIBLE(
-            displayName = "华为 / 荣耀实况",
-            badge = "HarmonyOS 兼容",
+            displayName = "华为 / 荣耀",
+            badge = "华为",
             subtitle = "华为与荣耀图库动态照片兼容",
             description = "包含 HwCamera:LivePhoto 偏移量及标准 Container 目录描述",
             makeTag = "HUAWEI",
@@ -121,8 +121,8 @@ class MotionPhotoBuilder(private val context: Context) {
             filePrefix = "IMG"
         ),
         SAMSUNG_ONEUI(
-            displayName = "三星 OneUI 动态照片",
-            badge = "Galaxy S25 Ultra",
+            displayName = "三星",
+            badge = "三星",
             subtitle = "三星相册与 Google Photos 兼容",
             description = "注入三星相机 EXIF 标识与标准 MotionPhoto 容器结构",
             makeTag = "samsung",
@@ -139,9 +139,9 @@ class MotionPhotoBuilder(private val context: Context) {
         val title: String,
         val subtitle: String
     ) {
-        NONE("单帧清晰定格", "提取指定微秒处的高清单帧"),
-        SILKY_BLUR("丝滑慢门长曝光", "融合多帧均值，适合流水、云雾与车流虚化"),
-        LIGHT_TRAIL("流光星轨叠加", "多帧峰值高光叠加，适合夜景车灯与烟花轨迹")
+        NONE("单帧", "使用当前时间点的视频画面"),
+        SILKY_BLUR("慢门", "多帧叠加模糊，适合流水与车流"),
+        LIGHT_TRAIL("光轨", "保留画面亮部轨迹，适合夜景")
     }
 
     /**
@@ -150,10 +150,10 @@ class MotionPhotoBuilder(private val context: Context) {
     enum class CoverFilter(
         val title: String
     ) {
-        ORIGINAL("原色直出"),
-        VIVID("鲜明流光"),
-        WARM_FILM("胶片暖调"),
-        MONOCHROME("经典黑白")
+        ORIGINAL("原图"),
+        VIVID("鲜明"),
+        WARM_FILM("暖色"),
+        MONOCHROME("黑白")
     }
 
     data class ConversionConfig(
@@ -550,7 +550,7 @@ class MotionPhotoBuilder(private val context: Context) {
             exif.setAttribute(ExifInterface.TAG_MAKE, config.format.makeTag)
             exif.setAttribute(ExifInterface.TAG_MODEL, config.format.modelTag)
             exif.setAttribute(ExifInterface.TAG_LENS_MODEL, config.format.lensTag)
-            exif.setAttribute(ExifInterface.TAG_SOFTWARE, "Motion Studio v3.0 MD3E")
+            exif.setAttribute(ExifInterface.TAG_SOFTWARE, "Motion Photo")
             exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
             exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
             exif.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, exifDate)
