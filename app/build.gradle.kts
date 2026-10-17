@@ -19,15 +19,18 @@ android {
         }
     }
 
+    val releaseKeystore = file("release-keystore.jks")
     signingConfigs {
-        create("release") {
-            storeFile = file("release-keystore.jks")
-            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "motionstudio2026"
-            keyAlias = System.getenv("KEY_ALIAS") ?: "motionstudio"
-            keyPassword = System.getenv("KEY_PASSWORD") ?: "motionstudio2026"
-            enableV1Signing = true
-            enableV2Signing = true
-            enableV3Signing = true
+        if (releaseKeystore.exists()) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
         }
     }
 
@@ -35,7 +38,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseKeystore.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
