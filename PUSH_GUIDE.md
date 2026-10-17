@@ -4,7 +4,7 @@
 
 Git 仓库已初始化并提交完成：
 ```
-✅ 24 个文件已提交
+项目文件将在安全检查完成后提交
 ✅ 远程仓库已配置：https://github.com/850912/Motion-Photo-.git
 ✅ 分支：main
 ```
@@ -91,7 +91,7 @@ git remote show origin
 https://github.com/850912/Motion-Photo-
 
 你应该能看到：
-- ✅ 24 个文件
+- ✅ 项目源码和 GitHub Actions 构建配置
 - ✅ README.md 显示项目说明
 - ✅ .github/workflows/android-build.yml（自动构建配置）
 - ✅ 完整的源代码
@@ -135,7 +135,7 @@ git push -u origin main --force
 
 ---
 
-**需要帮助？** 
+**需要帮助？**
 如果遇到问题，可以：
 1. 检查 GitHub token 权限
 2. 确认网络连接

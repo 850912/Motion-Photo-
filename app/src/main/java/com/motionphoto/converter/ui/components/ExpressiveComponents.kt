@@ -20,7 +20,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -38,6 +37,7 @@ import androidx.compose.material.icons.filled.AutoAwesomeMotion
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.MotionPhotosOn
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Icon
@@ -83,64 +83,68 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
+/**
+ * 1. 120Hz 高性能 MD3 Expressive 多叶徽章
+ * 优化点：
+ * - 复用 remember { Path() }，避免每帧分配 Path 对象引起 GC 卡顿
+ * - 静态展示时零无限重绘开销，仅在 isAnimating = true（如合成中）启用硬件层旋转
+ */
 @Composable
 fun ExpressiveMorphingBadge(
     modifier: Modifier = Modifier,
     lobes: Float = 8f,
-    waveAmplitude: Float = 0.11f,
+    waveAmplitude: Float = 0.10f,
+    isAnimating: Boolean = false,
     primaryColor: Color = MaterialTheme.colorScheme.primaryContainer,
     secondaryColor: Color = MaterialTheme.colorScheme.tertiaryContainer,
     outlineColor: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
     content: @Composable () -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "md3e_morph")
-    val phase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2f * PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 9000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "phase"
-    )
-    val breathe by infiniteTransition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2400),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "breathe"
-    )
-
     val animatedLobes by animateFloatAsState(
         targetValue = lobes,
-        animationSpec = ExpressiveMotion.slowSpatial(),
+        animationSpec = ExpressiveMotion.defaultSpatial(),
         label = "lobes"
     )
-    val animatedAmp by animateFloatAsState(
-        targetValue = waveAmplitude,
-        animationSpec = ExpressiveMotion.defaultSpatial(),
-        label = "amp"
-    )
+
+    val rotationDeg = if (isAnimating) {
+        val infiniteTransition = rememberInfiniteTransition(label = "badge_spin")
+        val rot by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 12000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "rot"
+        )
+        rot
+    } else {
+        0f
+    }
+
+    val outerPath = remember { Path() }
+    val mainPath = remember { Path() }
 
     Box(
-        modifier = modifier.graphicsLayer {
-            scaleX = breathe
-            scaleY = breathe
-        },
+        modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    rotationZ = rotationDeg
+                }
+        ) {
             val cx = size.width / 2f
             val cy = size.height / 2f
             val baseRadius = min(size.width, size.height) * 0.41f
+            val steps = 72
 
-            val outerPath = Path()
-            val steps = 160
+            outerPath.rewind()
             for (i in 0..steps) {
                 val theta = (i.toFloat() / steps) * (2f * PI.toFloat())
-                val r = baseRadius * 1.12f * (1f + (animatedAmp * 0.8f) * cos(animatedLobes * theta - phase * 0.7f))
+                val r = baseRadius * 1.11f * (1f + (waveAmplitude * 0.75f) * cos(animatedLobes * theta))
                 val x = cx + r * cos(theta)
                 val y = cy + r * sin(theta)
                 if (i == 0) outerPath.moveTo(x, y) else outerPath.lineTo(x, y)
@@ -148,13 +152,13 @@ fun ExpressiveMorphingBadge(
             outerPath.close()
             drawPath(
                 path = outerPath,
-                color = secondaryColor.copy(alpha = 0.45f)
+                color = secondaryColor.copy(alpha = 0.42f)
             )
 
-            val mainPath = Path()
+            mainPath.rewind()
             for (i in 0..steps) {
                 val theta = (i.toFloat() / steps) * (2f * PI.toFloat())
-                val r = baseRadius * (1f + animatedAmp * cos(animatedLobes * theta + phase))
+                val r = baseRadius * (1f + waveAmplitude * cos(animatedLobes * theta))
                 val x = cx + r * cos(theta)
                 val y = cy + r * sin(theta)
                 if (i == 0) mainPath.moveTo(x, y) else mainPath.lineTo(x, y)
@@ -179,6 +183,9 @@ fun ExpressiveMorphingBadge(
     }
 }
 
+/**
+ * 2. 零对象分配的 MD3E 波浪进度条 (复用 Path)
+ */
 @Composable
 fun ExpressiveWavyLinearProgress(
     progress: Float,
@@ -186,7 +193,7 @@ fun ExpressiveWavyLinearProgress(
     activeColor: Color = MaterialTheme.colorScheme.primary,
     trackColor: Color = MaterialTheme.colorScheme.surfaceVariant,
     strokeWidth: Dp = 6.dp,
-    waveAmplitude: Dp = 4.dp,
+    waveAmplitude: Dp = 3.5.dp,
     waveLength: Dp = 28.dp
 ) {
     val clampedProgress = progress.coerceIn(0f, 1f)
@@ -201,11 +208,13 @@ fun ExpressiveWavyLinearProgress(
         initialValue = 0f,
         targetValue = (2f * PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1100, easing = LinearEasing),
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "wave_phase"
     )
+
+    val wavePath = remember { Path() }
 
     Canvas(
         modifier = modifier
@@ -222,9 +231,9 @@ fun ExpressiveWavyLinearProgress(
         val activeEndX = startX + totalWidth * animatedProgress
 
         if (animatedProgress > 0.01f) {
-            val wavePath = Path()
+            wavePath.rewind()
             var x = startX
-            val step = 3f
+            val step = 4f
             var first = true
             while (x <= activeEndX) {
                 val angle = ((x - startX) / waveLenPx) * (2f * PI.toFloat()) - wavePhase
@@ -258,6 +267,9 @@ fun ExpressiveWavyLinearProgress(
     }
 }
 
+/**
+ * 3. 零分配环形波浪光环
+ */
 @Composable
 fun ExpressiveWavyCircularHalo(
     progress: Float,
@@ -271,31 +283,23 @@ fun ExpressiveWavyCircularHalo(
         animationSpec = ExpressiveMotion.defaultSpatial(),
         label = "circular_wavy_progress"
     )
-    val infiniteTransition = rememberInfiniteTransition(label = "circular_wave")
-    val phase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2f * PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "circular_phase"
-    )
+    val bgPath = remember { Path() }
+    val fgPath = remember { Path() }
 
     Canvas(modifier = modifier) {
         val strokePx = strokeWidth.toPx()
         val cx = size.width / 2f
         val cy = size.height / 2f
         val baseRadius = (min(size.width, size.height) / 2f) - strokePx * 1.8f
-        val waveAmp = strokePx * 0.52f
+        val waveAmp = strokePx * 0.45f
         val frequency = 12f
-        val steps = 180
+        val steps = 96
 
-        val bgPath = Path()
+        bgPath.rewind()
         for (i in 0..steps) {
             val ratio = i.toFloat() / steps
             val theta = -PI.toFloat() / 2f + ratio * 2f * PI.toFloat()
-            val r = baseRadius + (waveAmp * 0.4f) * sin(frequency * theta + phase)
+            val r = baseRadius + (waveAmp * 0.4f) * sin(frequency * theta)
             val x = cx + r * cos(theta)
             val y = cy + r * sin(theta)
             if (i == 0) bgPath.moveTo(x, y) else bgPath.lineTo(x, y)
@@ -308,11 +312,11 @@ fun ExpressiveWavyCircularHalo(
         )
 
         val activeSteps = (steps * animatedProgress).toInt().coerceAtLeast(2)
-        val fgPath = Path()
+        fgPath.rewind()
         for (i in 0..activeSteps) {
             val ratio = i.toFloat() / steps
             val theta = -PI.toFloat() / 2f + ratio * 2f * PI.toFloat()
-            val r = baseRadius + waveAmp * sin(frequency * theta - phase * 1.5f)
+            val r = baseRadius + waveAmp * sin(frequency * theta)
             val x = cx + r * cos(theta)
             val y = cy + r * sin(theta)
             if (i == 0) fgPath.moveTo(x, y) else fgPath.lineTo(x, y)
@@ -325,6 +329,9 @@ fun ExpressiveWavyCircularHalo(
     }
 }
 
+/**
+ * 4. 高响应连通形变按钮组 (Connected Button Group)
+ */
 @Composable
 fun <T> ExpressiveConnectedButtonGroup(
     items: List<T>,
@@ -343,66 +350,42 @@ fun <T> ExpressiveConnectedButtonGroup(
             val isFirst = index == 0
             val isLast = index == items.lastIndex
 
-            val topStart by animateDpAsState(
-                targetValue = if (isSelected || isFirst) 24.dp else 8.dp,
+            val startRadius by animateDpAsState(
+                targetValue = if (isSelected || isFirst) 22.dp else 8.dp,
                 animationSpec = ExpressiveMotion.fastSpatial(),
-                label = "ts"
+                label = "sr"
             )
-            val bottomStart by animateDpAsState(
-                targetValue = if (isSelected || isFirst) 24.dp else 8.dp,
+            val endRadius by animateDpAsState(
+                targetValue = if (isSelected || isLast) 22.dp else 8.dp,
                 animationSpec = ExpressiveMotion.fastSpatial(),
-                label = "bs"
-            )
-            val topEnd by animateDpAsState(
-                targetValue = if (isSelected || isLast) 24.dp else 8.dp,
-                animationSpec = ExpressiveMotion.fastSpatial(),
-                label = "te"
-            )
-            val bottomEnd by animateDpAsState(
-                targetValue = if (isSelected || isLast) 24.dp else 8.dp,
-                animationSpec = ExpressiveMotion.fastSpatial(),
-                label = "be"
+                label = "er"
             )
 
-            val containerColor by animateColorAsState(
-                targetValue = if (isSelected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-                },
-                animationSpec = ExpressiveMotion.fastEffects(),
-                label = "bg"
-            )
-            val contentColor by animateColorAsState(
-                targetValue = if (isSelected) {
-                    MaterialTheme.colorScheme.onPrimary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                animationSpec = ExpressiveMotion.fastEffects(),
-                label = "fg"
-            )
-
-            val weight by animateFloatAsState(
-                targetValue = if (isSelected) 1.22f else 1f,
-                animationSpec = ExpressiveMotion.fastSpatial(),
-                label = "weight"
-            )
+            val containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+            }
+            val contentColor = if (isSelected) {
+                MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
 
             Box(
                 modifier = Modifier
-                    .weight(weight)
-                    .height(46.dp)
+                    .weight(if (isSelected) 1.18f else 1f)
+                    .height(44.dp)
                     .clip(
                         RoundedCornerShape(
-                            topStart = topStart,
-                            bottomStart = bottomStart,
-                            topEnd = topEnd,
-                            bottomEnd = bottomEnd
+                            topStart = startRadius,
+                            bottomStart = startRadius,
+                            topEnd = endRadius,
+                            bottomEnd = endRadius
                         )
                     )
                     .background(containerColor)
-                    .expressiveBounceClick(pressedScale = 0.92f) {
+                    .expressiveBounceClick(pressedScale = 0.95f) {
                         onSelect(item)
                     }
                     .padding(horizontal = 8.dp),
@@ -420,13 +403,17 @@ fun <T> ExpressiveConnectedButtonGroup(
     }
 }
 
+/**
+ * 5. 底部悬浮胶囊导航栏 (新增 ABOUT "关于作者" 页面)
+ */
 enum class AppTab(
     val title: String,
     val icon: ImageVector
 ) {
-    STUDIO("创作工坊", Icons.Default.AutoAwesomeMotion),
-    INSPECTOR("实况检验", Icons.Default.Verified),
-    GALLERY("作品与兼容", Icons.Default.Collections)
+    STUDIO("创作", Icons.Default.AutoAwesomeMotion),
+    INSPECTOR("检验", Icons.Default.Verified),
+    GALLERY("作品", Icons.Default.Collections),
+    ABOUT("关于", Icons.Default.Person)
 }
 
 @Composable
@@ -438,18 +425,18 @@ fun ExpressiveFloatingToolbar(
 ) {
     Row(
         modifier = modifier
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Surface(
             modifier = Modifier
                 .weight(1f)
-                .height(68.dp)
+                .height(64.dp)
                 .shadow(
-                    elevation = 14.dp,
+                    elevation = 12.dp,
                     shape = CircleShape,
-                    spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+                    spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
                 ),
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surface,
@@ -458,8 +445,8 @@ fun ExpressiveFloatingToolbar(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AppTab.values().forEach { tab ->
@@ -473,31 +460,22 @@ fun ExpressiveFloatingToolbar(
                         animationSpec = ExpressiveMotion.fastEffects(),
                         label = "tab_pill_bg"
                     )
-                    val contentColor by animateColorAsState(
-                        targetValue = if (selected) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        animationSpec = ExpressiveMotion.fastEffects(),
-                        label = "tab_pill_fg"
-                    )
-                    val itemWeight by animateFloatAsState(
-                        targetValue = if (selected) 1.35f else 1f,
-                        animationSpec = ExpressiveMotion.defaultSpatial(),
-                        label = "tab_weight"
-                    )
+                    val contentColor = if (selected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
 
                     Row(
                         modifier = Modifier
-                            .weight(itemWeight)
-                            .height(52.dp)
+                            .weight(if (selected) 1.35f else 1f)
+                            .height(50.dp)
                             .clip(CircleShape)
                             .background(pillColor)
-                            .expressiveBounceClick(pressedScale = 0.92f) {
+                            .expressiveBounceClick(pressedScale = 0.94f) {
                                 onSelectTab(tab)
                             }
-                            .padding(horizontal = 12.dp),
+                            .padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
                     ) {
@@ -505,18 +483,17 @@ fun ExpressiveFloatingToolbar(
                             imageVector = tab.icon,
                             contentDescription = tab.title,
                             tint = contentColor,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(20.dp)
                         )
-                        AnimatedVisibility(visible = selected) {
-                            Row {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = tab.title,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = contentColor,
-                                    maxLines = 1
-                                )
-                            }
+                        if (selected) {
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = tab.title,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = contentColor,
+                                maxLines = 1
+                            )
                         }
                     }
                 }
@@ -525,16 +502,16 @@ fun ExpressiveFloatingToolbar(
 
         Surface(
             modifier = Modifier
-                .size(68.dp)
+                .size(64.dp)
                 .shadow(
-                    elevation = 14.dp,
-                    shape = RoundedCornerShape(24.dp),
-                    spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                    elevation = 12.dp,
+                    shape = RoundedCornerShape(22.dp),
+                    spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
                 )
-                .expressiveBounceClick(pressedScale = 0.90f) {
+                .expressiveBounceClick(pressedScale = 0.92f) {
                     onQuickPickVideo()
                 },
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(22.dp),
             color = MaterialTheme.colorScheme.primary
         ) {
             Box(contentAlignment = Alignment.Center) {
@@ -542,13 +519,17 @@ fun ExpressiveFloatingToolbar(
                     imageVector = Icons.Default.AddPhotoAlternate,
                     contentDescription = "选择视频",
                     tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(26.dp)
                 )
             }
         }
     }
 }
 
+/**
+ * 6. 按需加载 (Lazy ExoPlayer) 的实况照片交互预览卡
+ * 默认仅显示静态图片，仅当点击播放实况时才创建 ExoPlayer，避免进入页面时主线程解码卡顿
+ */
 @Composable
 fun LiveMotionPhotoPlayerCard(
     coverImageModel: Any?,
@@ -561,8 +542,8 @@ fun LiveMotionPhotoPlayerCard(
     val context = LocalContext.current
     var isPlayingLive by remember(videoFileOrUri) { mutableStateOf(autoPlayInitially) }
 
-    val exoPlayer = remember(videoFileOrUri) {
-        if (videoFileOrUri == null) {
+    val exoPlayer = remember(videoFileOrUri, isPlayingLive) {
+        if (!isPlayingLive || videoFileOrUri == null) {
             null
         } else {
             ExoPlayer.Builder(context).build().apply {
@@ -576,19 +557,8 @@ fun LiveMotionPhotoPlayerCard(
                     setMediaItem(MediaItem.fromUri(uri))
                     repeatMode = Player.REPEAT_MODE_ONE
                     prepare()
-                    playWhenReady = autoPlayInitially
+                    playWhenReady = true
                 }
-            }
-        }
-    }
-
-    LaunchedEffect(isPlayingLive, exoPlayer) {
-        if (exoPlayer != null) {
-            if (isPlayingLive) {
-                exoPlayer.seekTo(0)
-                exoPlayer.play()
-            } else {
-                exoPlayer.pause()
             }
         }
     }
@@ -599,13 +569,8 @@ fun LiveMotionPhotoPlayerCard(
         }
     }
 
-    val cardScale by animateFloatAsState(
-        targetValue = if (isPlayingLive) 1.018f else 1f,
-        animationSpec = ExpressiveMotion.defaultSpatial(),
-        label = "live_photo_scale"
-    )
     val cornerRadius by animateDpAsState(
-        targetValue = if (isPlayingLive) 22.dp else 32.dp,
+        targetValue = if (isPlayingLive) 22.dp else 30.dp,
         animationSpec = ExpressiveMotion.defaultSpatial(),
         label = "live_photo_corner"
     )
@@ -614,14 +579,10 @@ fun LiveMotionPhotoPlayerCard(
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(4f / 3f)
-            .graphicsLayer {
-                scaleX = cardScale
-                scaleY = cardScale
-            }
             .clip(RoundedCornerShape(cornerRadius))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(
-                width = if (isPlayingLive) 2.5.dp else 1.dp,
+                width = if (isPlayingLive) 2.dp else 1.dp,
                 color = if (isPlayingLive) {
                     MaterialTheme.colorScheme.primary
                 } else {
@@ -629,8 +590,8 @@ fun LiveMotionPhotoPlayerCard(
                 },
                 shape = RoundedCornerShape(cornerRadius)
             )
-            .expressiveBounceClick(pressedScale = 0.97f) {
-                if (exoPlayer != null) {
+            .expressiveBounceClick(pressedScale = 0.98f) {
+                if (videoFileOrUri != null) {
                     isPlayingLive = !isPlayingLive
                 }
             }
@@ -644,8 +605,8 @@ fun LiveMotionPhotoPlayerCard(
 
         AnimatedVisibility(
             visible = isPlayingLive && exoPlayer != null,
-            enter = fadeIn(animationSpec = tween(220)),
-            exit = fadeOut(animationSpec = tween(220)),
+            enter = fadeIn(animationSpec = tween(180)),
+            exit = fadeOut(animationSpec = tween(180)),
             modifier = Modifier.fillMaxSize()
         ) {
             if (exoPlayer != null) {
@@ -669,24 +630,16 @@ fun LiveMotionPhotoPlayerCard(
             }
         }
 
-        val badgeBg by animateColorAsState(
-            targetValue = if (isPlayingLive) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                Color.Black.copy(alpha = 0.62f)
-            },
-            animationSpec = ExpressiveMotion.fastEffects(),
-            label = "live_badge_bg"
-        )
-        val badgeFg by animateColorAsState(
-            targetValue = if (isPlayingLive) {
-                MaterialTheme.colorScheme.onPrimary
-            } else {
-                Color.White
-            },
-            animationSpec = ExpressiveMotion.fastEffects(),
-            label = "live_badge_fg"
-        )
+        val badgeBg = if (isPlayingLive) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            Color.Black.copy(alpha = 0.62f)
+        }
+        val badgeFg = if (isPlayingLive) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            Color.White
+        }
 
         Row(
             modifier = Modifier
@@ -705,7 +658,7 @@ fun LiveMotionPhotoPlayerCard(
                 modifier = Modifier.size(16.dp)
             )
             Text(
-                text = if (isPlayingLive) "实况播放中 · LIVE" else "实况 · 点击播放",
+                text = if (isPlayingLive) "实况播放中 · LIVE" else "实况 · 点击画面播放",
                 style = MaterialTheme.typography.labelMedium,
                 color = badgeFg
             )
@@ -731,21 +684,19 @@ fun LiveMotionPhotoPlayerCard(
                 )
             }
 
-            if (exoPlayer != null) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isPlayingLive) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isPlayingLive) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
     }

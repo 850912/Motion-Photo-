@@ -1,13 +1,12 @@
-# Motion Studio (v3.0 Release · Material 3 Expressive 开源融合旗舰版)
+# Motion Studio (v3.5 · Material 3 Expressive)
 
 一个采用 Google 最新 **Material 3 Expressive (MD3E)** 设计语言与物理弹簧动效体系构建的 **Android 实况照片（Motion Photo）全能合成、图影混流、长曝光、无损拆解与修复工具**。
 
-## 🚀 v3.0 Release 升级亮点
+## 🚀 v3.5 升级亮点
 
-### 1. Release 与 Debug 构建
-- Release 启用 R8 代码和资源压缩。为避免把签名私钥提交到仓库，release keystore 应通过受保护的 CI secrets 管理；没有配置私钥时，CI 产物为 unsigned APK。
-- GitHub Actions 同时生成 Release 与 Debug APK。手机上直接安装测试，请下载 Debug APK；Release APK 需要使用自己的签名密钥签名后才能安装。
-- 每次推送会上传 Actions artifacts；发布到 GitHub Releases 由 workflow 的发布条件控制。
+### 1. Release 构建配置（R8 压缩）
+- 仓库不包含签名密钥。Release 构建启用 R8 代码混淆与资源压缩 (`isMinifyEnabled = true`、`isShrinkResources = true`)，生成未签名 APK。
+- 推送至 GitHub Actions 后会生成 Release 和 Debug APK；正式发布前请使用你自己的签名密钥签名 Release APK。
 
 ### 2. 融合三大开源项目的 5 项旗舰新功能
 - **图影混流合成 (`Photo + Video Dual-Source Muxer`，参考 `PetrVys/MotionPhoto2` & `googleinterns/libmphoto`)**：支持任选一张高像素静态照片（JPG/PNG/HEIC，如修图后照片或 iOS 导出的实况静态图）与任意视频流无损合成为单文件 Android 实况照片。
