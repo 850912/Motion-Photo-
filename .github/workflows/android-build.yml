@@ -1,4 +1,4 @@
-name: Android Release & Debug Build (MotionPhoto v1.3)
+name: Android Release & Debug Build (MotionPhoto v1.4)
 
 on:
   push:
@@ -37,30 +37,31 @@ jobs:
         mkdir -p release-dist
         RELEASE_APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)
         test -n "$RELEASE_APK"
-        cp "$RELEASE_APK" release-dist/MotionPhoto-v1.3-MD3E-Release-unsigned.apk
-        cp app/build/outputs/apk/debug/app-debug.apk release-dist/MotionPhoto-v1.3-MD3E-Debug.apk
+        cp "$RELEASE_APK" release-dist/MotionPhoto-v1.4-MD3E-Release-unsigned.apk
+        cp app/build/outputs/apk/debug/app-debug.apk release-dist/MotionPhoto-v1.4-MD3E-Debug.apk
         ls -lh release-dist/
 
     - name: Upload Release APK Artifact (unsigned)
       uses: actions/upload-artifact@v4
       with:
-        name: MotionPhoto-v1.3-MD3E-Release-unsigned-APK
-        path: release-dist/MotionPhoto-v1.3-MD3E-Release-unsigned.apk
+        name: MotionPhoto-v1.4-MD3E-Release-unsigned-APK
+        path: release-dist/MotionPhoto-v1.4-MD3E-Release-unsigned.apk
 
     - name: Upload Debug APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: MotionPhoto-v1.3-MD3E-Debug-APK
-        path: release-dist/MotionPhoto-v1.3-MD3E-Debug.apk
+        name: MotionPhoto-v1.4-MD3E-Debug-APK
+        path: release-dist/MotionPhoto-v1.4-MD3E-Debug.apk
 
     - name: Publish GitHub Release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: v1.3.0-motionphoto
-        name: "MotionPhoto v1.3.0 Release"
+        tag_name: v1.4.0-build-${{ github.run_number }}
+        target_commitish: ${{ github.sha }}
+        name: "MotionPhoto v1.4.0 Build ${{ github.run_number }}"
         body: |
-          ### MotionPhoto v1.3.0 Release
+          ### MotionPhoto v1.4.0 Release
           - Release APK uses the repository's configured signing key when provided; otherwise it is unsigned and must be signed before installation. Debug APK is available for direct testing.
           - **新增开源项目融合特性**：
             1. **图影混流合成 (`Photo + Video Muxer`)**：支持任选外部高清静态图片（JPG/PNG/HEIC）与视频流合成为实况照片（参考 `PetrVys/MotionPhoto2` 与 `googleinterns/libmphoto`）。
@@ -69,5 +70,5 @@ jobs:
             4. **实况无损拆解 (`Demuxer`) & 损坏实况一键修复 (`live-photo-repair`)**：支持一键提取内嵌 MP4 视频到相册、提取纯净静态 JPG，以及自动扫描 `ftyp` 偏移修复损坏的实况照片。
             5. **多视频批量合成队列 (`Batch Queue`)**：支持一次选择多个视频批量转换为实况照片。
         files: |
-          release-dist/MotionPhoto-v1.3-MD3E-Release-unsigned.apk
-          release-dist/MotionPhoto-v1.3-MD3E-Debug.apk
+          release-dist/MotionPhoto-v1.4-MD3E-Release-unsigned.apk
+          release-dist/MotionPhoto-v1.4-MD3E-Debug.apk

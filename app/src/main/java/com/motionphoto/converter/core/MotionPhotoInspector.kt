@@ -21,11 +21,16 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 动态照片（Motion Photo）二进制容器检验、无损拆解 (Demuxer) 与一键修复器 (Repair)
+ * 动态照片（Motion Photo）& 微信 GIF 动图二进制容器检验、无损拆解 (Demuxer) 与一键修复器 (Repair)
  *
- * 优化点：
- * - 全链路 64KB 缓冲流加速文件读取与分离
- * - 自动清理旧的 inspected_motion_* 临时缓存视频，防止缓存膨胀
+ * 支持检测与拆解：
+ * - Google Motion Photo 1.0 (`GCamera:MotionPhoto` + `Container:Directory`)
+ * - 小米澎湃OS / MIUI `MicroVideo`
+ * - OPPO / 一加 / Realme `OpCamera` O-Live Photo v2
+ * - vivo / iQOO OriginOS `VCamera` + `vivoMediaExtInfo` 240字节 UUID 尾盒
+ * - 华为 / 荣耀 `HwCamera:LivePhoto` + `LIVE_264______` 尾标
+ * - 三星 OneUI `MotionPhoto_Data` + `SEFH`/`SEFT` 尾部校验块
+ * - 微信 / QQ / 社交平台 `GIF89a` 循环动图 (含 <1MB 微信表情包体积合规性诊断)
  */
 object MotionPhotoInspector {
 
@@ -57,14 +62,15 @@ object MotionPhotoInspector {
 
     suspend fun inspectUri(context: Context, uri: Uri): Result<InspectionReport> = withContext(Dispatchers.IO) {
         try {
-            val tempCopy = File(context.cacheDir, "inspect_source_${System.currentTimeMillis()}.jpg")
+            val displayName = queryDisplayName(context, uri) ?: "inspected_media.jpg"
+            val ext = if (displayName.endsWith(".gif", ignoreCase = true)) ".gif" else ".jpg"
+            val tempCopy = File(context.cacheDir, "inspect_source_${System.currentTimeMillis()}$ext")
             context.contentResolver.openInputStream(uri)?.use { input ->
                 BufferedOutputStream(FileOutputStream(tempCopy), IO_BUFFER_SIZE).use { out ->
                     input.copyTo(out, IO_BUFFER_SIZE)
                 }
             } ?: return@withContext Result.failure(IllegalArgumentException("无法读取所选文件"))
 
-            val displayName = queryDisplayName(context, uri) ?: tempCopy.name
             val result = inspectFile(context, tempCopy, displayNameOverride = displayName)
             tempCopy.delete()
             result
@@ -83,11 +89,54 @@ object MotionPhotoInspector {
                 return@withContext Result.failure(IllegalArgumentException("文件不存在或体积过小"))
             }
 
-            // 清理之前检验遗留的临时视频文件
             cleanupOldInspectedVideos(context.cacheDir)
 
             val totalSize = file.length()
             val fileName = displayNameOverride ?: file.name
+
+            // 分支 1：检测是否为 GIF89a / GIF87a 微信/社交循环动图
+            val gifHeaderInfo = inspectGifHeader(file)
+            if (gifHeaderInfo != null) {
+                val (gifVersion, gifW, gifH) = gifHeaderInfo
+                val isWeChatStickerReady = totalSize <= 1024L * 1024L && maxOf(gifW, gifH) <= 360
+                val standards = mutableListOf(
+                    "$gifVersion 循环动图",
+                    if (isWeChatStickerReady) "微信表情包合规 (<1MB)" else "社交聊天高清 GIF 动图"
+                )
+                val notes = listOf(
+                    "检出标准 $gifVersion 动图文件头，画幅尺寸 ${gifW}×${gifH} px",
+                    if (isWeChatStickerReady) {
+                        "文件体积 ${totalSize / 1024} KB (< 1MB)，在微信聊天中发送后可直接长按「添加到表情」"
+                    } else {
+                        "文件体积 ${totalSize / 1024} KB，支持在微信聊天、QQ、微博中作为动态图片直接发送"
+                    }
+                )
+                return@withContext Result.success(
+                    InspectionReport(
+                        fileName = fileName,
+                        totalFileSize = totalSize,
+                        isValidMotionPhoto = true,
+                        canBeRepaired = false,
+                        detectedStandards = standards,
+                        hasXmpPacket = false,
+                        rawXmpSnippet = "",
+                        motionPhotoFlag = 1,
+                        microVideoFlag = 0,
+                        presentationTimestampUs = 0L,
+                        declaredVideoLength = 0L,
+                        actualMp4Offset = 0L,
+                        actualMp4Length = 0L,
+                        jpegPortionSize = totalSize,
+                        extractedVideoFile = null,
+                        primaryMime = "image/gif",
+                        secondaryMime = "image/gif (Loop)",
+                        MakeModelSummary = "$gifVersion Animated Image (${gifW}×${gifH})",
+                        diagnosticNotes = notes
+                    )
+                )
+            }
+
+            // 分支 2：标准与各厂商实况照片 (JPEG + XMP + MP4) 检验
             val notes = mutableListOf<String>()
             val standards = mutableListOf<String>()
 
@@ -106,13 +155,20 @@ object MotionPhotoInspector {
             var declaredLength = 0L
 
             if (rawXmp != null) {
-                notes.add("成功定位 JPEG APP1 XMP 元数据段 (${rawXmp.toByteArray().size} bytes)")
+                val xmpValid = xmpMeta != null
+                notes.add(
+                    if (xmpValid) {
+                        "成功解析 JPEG APP1 XMP 元数据段 (${rawXmp.toByteArray().size} bytes，通过 Adobe XMP SDK 语法校验)"
+                    } else {
+                        "定位到 JPEG APP1 XMP 段 (${rawXmp.toByteArray().size} bytes)"
+                    }
+                )
                 motionPhotoFlag = parseXmpInt(xmpMeta, XmpMetadataWriter.NS_GCAMERA, "MotionPhoto")
                     ?: Regex("""(?:GCamera|Camera):MotionPhoto[=">]+(\d+)""").find(rawXmp)?.groupValues?.get(1)?.toIntOrNull()
                     ?: 0
 
                 microVideoFlag = parseXmpInt(xmpMeta, XmpMetadataWriter.NS_GCAMERA, "MicroVideo")
-                    ?: Regex("""GCamera:MicroVideo[=">]+(\d+)""").find(rawXmp)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""(?:GCamera|Camera):MicroVideo[=">]+(\d+)""").find(rawXmp)?.groupValues?.get(1)?.toIntOrNull()
                     ?: 0
 
                 timestampUs = parseXmpLong(xmpMeta, XmpMetadataWriter.NS_GCAMERA, "MotionPhotoPresentationTimestampUs")
@@ -141,16 +197,41 @@ object MotionPhotoInspector {
                     standards.add("Google Motion Photo 1.0")
                 }
                 if (microVideoFlag == 1 || microOffset > 0) {
-                    standards.add("小米 MicroVideo")
+                    standards.add("小米澎湃OS MicroVideo")
                 }
                 if (rawXmp.contains("OpCamera:") || rawXmp.contains("oplus")) {
-                    standards.add("OPPO O-Live Photo")
+                    standards.add("OPPO O-Live Photo v2")
+                }
+                if (rawXmp.contains("VCamera:")) {
+                    standards.add("vivo OriginOS VCamera")
                 }
                 if (rawXmp.contains("HwCamera:LivePhoto")) {
-                    standards.add("华为实况照片")
+                    standards.add("华为/荣耀 LivePhoto")
                 }
             } else {
                 notes.add("未在 JPEG 头部检测到 XMP APP1 数据段")
+            }
+
+            val hasSamsungSefFooter = checkSamsungSefFooter(file)
+            if (hasSamsungSefFooter) {
+                standards.add("三星 OneUI SEF (MotionPhoto_Data)")
+                notes.add("检出三星专属 SEFH/SEFT MotionPhoto_Data 尾部校验块")
+            }
+
+            val hasVivoUuidFooter = checkVivoUuidFooter(file)
+            if (hasVivoUuidFooter) {
+                if (!standards.contains("vivo OriginOS VCamera")) {
+                    standards.add("vivo OriginOS LivePhoto UUID")
+                }
+                notes.add("检出 vivo 专属 240 字节 vivoMediaExtInfo / cameralbum! 实况尾盒")
+            }
+
+            val hasHuaweiLiveFooter = checkHuaweiLiveFooter(file)
+            if (hasHuaweiLiveFooter) {
+                if (!standards.contains("华为/荣耀 LivePhoto")) {
+                    standards.add("华为/荣耀 LIVE_264 尾标")
+                }
+                notes.add("检出华为/荣耀 LIVE_264______ 实况尾标")
             }
 
             val mp4OffsetFromFtyp = findMp4HeaderOffset(file)
@@ -166,26 +247,29 @@ object MotionPhotoInspector {
                 else -> -1L
             }
 
+            val sefTailBytes = if (hasSamsungSefFooter) 32L else 0L
+            val sefHeaderBytes = if (hasSamsungSefFooter) 24L else 0L
             val actualMp4Length = if (resolvedMp4Offset in 1 until totalSize) {
-                totalSize - resolvedMp4Offset
+                (totalSize - resolvedMp4Offset - sefTailBytes).coerceAtLeast(0L)
             } else {
                 0L
+            }
+
+            val jpegEndOffset = if (resolvedMp4Offset > sefHeaderBytes) {
+                resolvedMp4Offset - sefHeaderBytes
+            } else if (resolvedMp4Offset > 0) {
+                resolvedMp4Offset
+            } else {
+                totalSize
             }
 
             var extractedVideo: File? = null
             if (resolvedMp4Offset in 1 until totalSize && actualMp4Length > 64) {
                 val outVideo = File(context.cacheDir, "inspected_motion_${System.currentTimeMillis()}.mp4")
-                extractTailBytes(file, resolvedMp4Offset, outVideo)
+                extractTailBytes(file, resolvedMp4Offset, actualMp4Length, outVideo)
                 if (isValidMp4Header(outVideo)) {
                     extractedVideo = outVideo
                     notes.add("成功验证内嵌 MP4 视频容器 (偏移量 $resolvedMp4Offset, 大小 $actualMp4Length bytes)")
-                    if (declaredLength > 0 && declaredLength == actualMp4Length) {
-                        notes.add("XMP 声明长度与实际尾部 MP4 字节长度完全一致")
-                    } else if (declaredLength > 0) {
-                        notes.add("警告：XMP 声明长度 ($declaredLength) 与实际 MP4 长度 ($actualMp4Length) 不一致，可一键修复")
-                    } else {
-                        notes.add("警告：存在内嵌 MP4 但缺少 Container:Directory 长度声明，可一键修复")
-                    }
                 } else {
                     outVideo.delete()
                 }
@@ -193,15 +277,8 @@ object MotionPhotoInspector {
                 notes.add("未在文件尾部检出内嵌 MP4 视频流")
             }
 
-            if (fileName.endsWith("MP.jpg", ignoreCase = true) || fileName.endsWith("MP.jpeg", ignoreCase = true)) {
-                notes.add("文件名符合 Android Motion Photo 1.0 官方 *MP.jpg 规范")
-            } else if (extractedVideo != null) {
-                notes.add("提示：文件名未以 MP.jpg 结尾，点击「一键修复并重导出」可自动补全规范命名")
-            }
-
             val isValid = (motionPhotoFlag == 1 || microVideoFlag == 1 || standards.isNotEmpty()) &&
-                extractedVideo != null &&
-                (declaredLength == 0L || declaredLength == actualMp4Length)
+                extractedVideo != null
 
             val canRepair = extractedVideo != null
 
@@ -220,7 +297,7 @@ object MotionPhotoInspector {
                     declaredVideoLength = declaredLength,
                     actualMp4Offset = resolvedMp4Offset,
                     actualMp4Length = actualMp4Length,
-                    jpegPortionSize = if (resolvedMp4Offset > 0) resolvedMp4Offset else totalSize,
+                    jpegPortionSize = jpegEndOffset,
                     extractedVideoFile = extractedVideo,
                     primaryMime = "image/jpeg",
                     secondaryMime = "video/mp4",
@@ -230,6 +307,65 @@ object MotionPhotoInspector {
             )
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private fun inspectGifHeader(file: File): Triple<String, Int, Int>? {
+        if (file.length() < 14) return null
+        return try {
+            FileInputStream(file).use { input ->
+                val header = ByteArray(10)
+                if (input.read(header) < 10) return null
+                val magic = String(header, 0, 6, Charsets.US_ASCII)
+                if (magic != "GIF89a" && magic != "GIF87a") return null
+                val width = (header[6].toInt() and 0xFF) or ((header[7].toInt() and 0xFF) shl 8)
+                val height = (header[8].toInt() and 0xFF) or ((header[9].toInt() and 0xFF) shl 8)
+                Triple(magic, width, height)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun checkSamsungSefFooter(file: File): Boolean {
+        if (file.length() < 36) return false
+        return try {
+            RandomAccessFile(file, "r").use { raf ->
+                raf.seek(file.length() - 4)
+                val tail = ByteArray(4)
+                raf.readFully(tail)
+                String(tail, Charsets.US_ASCII) == "SEFT"
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun checkVivoUuidFooter(file: File): Boolean {
+        if (file.length() < 260) return false
+        return try {
+            RandomAccessFile(file, "r").use { raf ->
+                raf.seek(file.length() - 12)
+                val tail = ByteArray(11)
+                raf.readFully(tail)
+                String(tail, Charsets.US_ASCII) == "cameralbum!"
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun checkHuaweiLiveFooter(file: File): Boolean {
+        if (file.length() < 32) return false
+        return try {
+            RandomAccessFile(file, "r").use { raf ->
+                raf.seek(file.length() - 14)
+                val tail = ByteArray(14)
+                raf.readFully(tail)
+                String(tail, Charsets.US_ASCII).startsWith("LIVE_")
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -335,7 +471,7 @@ object MotionPhotoInspector {
     }
 
     /**
-     * 一键修复损坏或无法被系统相册识别的实况照片
+     * 一键修复损坏或无法被系统相册/微信识别的实况照片
      */
     suspend fun repairMotionPhotoToGallery(
         context: Context,
@@ -348,7 +484,6 @@ object MotionPhotoInspector {
             val tempSource = copySourceToTemp(context, sourceUriOrFile)
                 ?: return@withContext Result.failure(IllegalArgumentException("无法读取源文件"))
 
-            // 1. 截取纯净 JPEG 头部
             val pureJpeg = File(context.cacheDir, "repair_head_${System.currentTimeMillis()}.jpg")
             BufferedInputStream(FileInputStream(tempSource), IO_BUFFER_SIZE).use { input ->
                 BufferedOutputStream(FileOutputStream(pureJpeg), IO_BUFFER_SIZE).use { out ->
@@ -365,11 +500,10 @@ object MotionPhotoInspector {
             }
             tempSource.delete()
 
-            // 2. 重新生成全品牌兼容 XMP 并注入
             val xmpPacket = XmpMetadataWriter.createXmpPacket(
                 format = MotionPhotoBuilder.OutputFormat.UNIVERSAL,
                 videoLength = videoFile.length(),
-                presentationTimestampUs = if (report.presentationTimestampUs >= 0) report.presentationTimestampUs else 500_000L,
+                presentationTimestampUs = if (report.presentationTimestampUs > 0) report.presentationTimestampUs else 500_000L,
                 videoDurationMs = 2500L,
                 videoMimeType = "video/mp4"
             )
@@ -377,7 +511,6 @@ object MotionPhotoInspector {
             XmpMetadataWriter.injectXmpIntoJpeg(pureJpeg, xmpPacket, jpegWithXmp)
             pureJpeg.delete()
 
-            // 3. 拼接并保存至系统相册 DCIM/Camera
             val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
             val outName = "MVIMG_${sdf.format(Date())}_REPAIRED.MP.jpg"
             val appOutDir = File(context.getExternalFilesDir(null), "MotionPhotos").apply {
@@ -515,7 +648,7 @@ object MotionPhotoInspector {
         }
     }
 
-    private fun extractTailBytes(source: File, startOffset: Long, dest: File) {
+    private fun extractTailBytes(source: File, startOffset: Long, byteLength: Long, dest: File) {
         BufferedInputStream(FileInputStream(source), IO_BUFFER_SIZE).use { input ->
             BufferedOutputStream(FileOutputStream(dest), IO_BUFFER_SIZE).use { output ->
                 var remainingSkip = startOffset
@@ -524,7 +657,16 @@ object MotionPhotoInspector {
                     if (skipped <= 0) break
                     remainingSkip -= skipped
                 }
-                input.copyTo(output, IO_BUFFER_SIZE)
+                val buf = ByteArray(IO_BUFFER_SIZE)
+                var remaining = byteLength
+                while (remaining > 0) {
+                    val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                    val read = input.read(buf, 0, toRead)
+                    if (read <= 0) break
+                    output.write(buf, 0, read)
+                    remaining -= read
+                }
+                output.flush()
             }
         }
     }

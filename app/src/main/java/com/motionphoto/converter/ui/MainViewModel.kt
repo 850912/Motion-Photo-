@@ -2,7 +2,9 @@ package com.motionphoto.converter.ui
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.content.ContentUris
 import android.net.Uri
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
@@ -42,42 +44,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         CRYSTAL_DROP(
             title = "灵动水滴",
-            subtitle = "高折射清透水滴质感",
-            blurRadiusDp = 16f,
-            refractionStrength = 0.65f,
-            dispersionStrength = 0.50f,
-            tintAlpha = 0.22f,
-            specularStrength = 0.80f,
-            cornerRadiusDp = 32f
+            subtitle = "高折射清透水滴透镜质感",
+            blurRadiusDp = 14f,
+            refractionStrength = 0.72f,
+            dispersionStrength = 0.55f,
+            tintAlpha = 0.20f,
+            specularStrength = 0.85f,
+            cornerRadiusDp = 33f
         ),
         FROSTED_MIST(
             title = "柔雾磨砂",
-            subtitle = "柔和漫射高模糊毛玻璃",
+            subtitle = "柔和漫射高模糊亚克力毛玻璃",
             blurRadiusDp = 28f,
-            refractionStrength = 0.30f,
-            dispersionStrength = 0.20f,
-            tintAlpha = 0.45f,
-            specularStrength = 0.50f,
-            cornerRadiusDp = 32f
+            refractionStrength = 0.35f,
+            dispersionStrength = 0.22f,
+            tintAlpha = 0.44f,
+            specularStrength = 0.55f,
+            cornerRadiusDp = 33f
         ),
         PRISM_LENS(
             title = "高折棱镜",
-            subtitle = "强曲面折射与边缘色散",
-            blurRadiusDp = 12f,
-            refractionStrength = 0.90f,
-            dispersionStrength = 0.85f,
-            tintAlpha = 0.18f,
-            specularStrength = 0.95f,
-            cornerRadiusDp = 32f
+            subtitle = "强曲面 SDF 折射与五通道光谱色散",
+            blurRadiusDp = 10f,
+            refractionStrength = 0.95f,
+            dispersionStrength = 0.90f,
+            tintAlpha = 0.16f,
+            specularStrength = 0.98f,
+            cornerRadiusDp = 33f
         ),
         CLASSIC_SOLID(
             title = "温润玉石",
-            subtitle = "低透光高饱和温润质感",
+            subtitle = "低透光高饱和温润凝脂质感",
             blurRadiusDp = 22f,
-            refractionStrength = 0.40f,
-            dispersionStrength = 0.25f,
-            tintAlpha = 0.72f,
-            specularStrength = 0.60f,
+            refractionStrength = 0.42f,
+            dispersionStrength = 0.28f,
+            tintAlpha = 0.70f,
+            specularStrength = 0.65f,
             cornerRadiusDp = 28f
         );
 
@@ -90,12 +92,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     data class LiquidGlassConfig(
         val enabled: Boolean = true,
         val preset: LiquidGlassPreset? = LiquidGlassPreset.CRYSTAL_DROP,
-        val blurRadiusDp: Float = 16f,
-        val refractionStrength: Float = 0.65f,
-        val dispersionStrength: Float = 0.50f,
-        val tintAlpha: Float = 0.22f,
-        val specularStrength: Float = 0.80f,
-        val cornerRadiusDp: Float = 32f
+        val blurRadiusDp: Float = 14f,
+        val refractionStrength: Float = 0.72f,
+        val dispersionStrength: Float = 0.55f,
+        val tintAlpha: Float = 0.20f,
+        val specularStrength: Float = 0.85f,
+        val cornerRadiusDp: Float = 33f
     )
 
     @Immutable
@@ -112,7 +114,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val key: String,
         val name: String,
         val formattedMeta: String,
-        val lastModified: Long
+        val lastModified: Long,
+        val isGif: Boolean = false
+    )
+
+    @Immutable
+    data class LocalMediaEntry(
+        val id: Long,
+        val uri: Uri,
+        val displayName: String,
+        val bucketName: String,
+        val durationMs: Long,
+        val width: Int,
+        val height: Int,
+        val sizeBytes: Long,
+        val isVideo: Boolean
     )
 
     private val _themeSettings = MutableStateFlow(ThemeSettings())
@@ -162,7 +178,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         @Immutable
         data class Success(
             val result: MotionPhotoBuilder.ConversionResult,
-            val batchCount: Int = 1
+            val batchCount: Int = 1,
+            val isExportingGif: Boolean = false
         ) : StudioState()
 
         @Immutable
@@ -184,7 +201,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         data class ResultReady(
             val sourceUriOrFile: Any,
             val report: MotionPhotoInspector.InspectionReport,
-            val actionFeedback: String? = null
+            val actionFeedback: String? = null,
+            val isExportingGif: Boolean = false
         ) : InspectorState()
 
         @Immutable
@@ -266,18 +284,125 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 直接从本机 MediaStore 查询本地视频或图片，完全绕过 Google 相册云端选择器 (PICK_IMAGES)，
+     * 彻底杜绝“部分照片无法加载”弹窗与云端未同步视频无法读取的问题。
+     */
+    suspend fun queryLocalDeviceMedia(isVideo: Boolean, limit: Int = 180): List<LocalMediaEntry> = withContext(Dispatchers.IO) {
+        val list = ArrayList<LocalMediaEntry>()
+        try {
+            val resolver = getApplication<Application>().contentResolver
+            if (isVideo) {
+                val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                val projection = arrayOf(
+                    MediaStore.Video.Media._ID,
+                    MediaStore.Video.Media.DISPLAY_NAME,
+                    MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+                    MediaStore.Video.Media.DURATION,
+                    MediaStore.Video.Media.WIDTH,
+                    MediaStore.Video.Media.HEIGHT,
+                    MediaStore.Video.Media.SIZE
+                )
+                val sortOrder = "${MediaStore.Video.Media.DATE_ADDED} DESC"
+                resolver.query(collection, projection, null, null, sortOrder)?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                    val nameCol = cursor.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
+                    val bucketCol = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+                    val durCol = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
+                    val wCol = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
+                    val hCol = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+                    val sizeCol = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
+
+                    while (cursor.moveToNext() && list.size < limit) {
+                        val id = cursor.getLong(idCol)
+                        val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
+                        if (size <= 0L) continue
+                        val contentUri = ContentUris.withAppendedId(collection, id)
+                        val name = if (nameCol >= 0) (cursor.getString(nameCol) ?: "VID_$id.mp4") else "VID_$id.mp4"
+                        val bucket = if (bucketCol >= 0) (cursor.getString(bucketCol) ?: "本地视频") else "本地视频"
+                        val duration = if (durCol >= 0) cursor.getLong(durCol).coerceAtLeast(0L) else 0L
+                        val w = if (wCol >= 0) cursor.getInt(wCol) else 0
+                        val h = if (hCol >= 0) cursor.getInt(hCol) else 0
+                        list.add(
+                            LocalMediaEntry(
+                                id = id,
+                                uri = contentUri,
+                                displayName = name,
+                                bucketName = bucket,
+                                durationMs = duration,
+                                width = w,
+                                height = h,
+                                sizeBytes = size,
+                                isVideo = true
+                            )
+                        )
+                    }
+                }
+            } else {
+                val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                val projection = arrayOf(
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DISPLAY_NAME,
+                    MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+                    MediaStore.Images.Media.WIDTH,
+                    MediaStore.Images.Media.HEIGHT,
+                    MediaStore.Images.Media.SIZE
+                )
+                val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+                resolver.query(collection, projection, null, null, sortOrder)?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                    val nameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                    val bucketCol = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+                    val wCol = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+                    val hCol = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+                    val sizeCol = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
+
+                    while (cursor.moveToNext() && list.size < limit) {
+                        val id = cursor.getLong(idCol)
+                        val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
+                        if (size <= 0L) continue
+                        val contentUri = ContentUris.withAppendedId(collection, id)
+                        val name = if (nameCol >= 0) (cursor.getString(nameCol) ?: "IMG_$id.jpg") else "IMG_$id.jpg"
+                        val bucket = if (bucketCol >= 0) (cursor.getString(bucketCol) ?: "本地相册") else "本地相册"
+                        val w = if (wCol >= 0) cursor.getInt(wCol) else 0
+                        val h = if (hCol >= 0) cursor.getInt(hCol) else 0
+                        list.add(
+                            LocalMediaEntry(
+                                id = id,
+                                uri = contentUri,
+                                displayName = name,
+                                bucketName = bucket,
+                                durationMs = 0L,
+                                width = w,
+                                height = h,
+                                sizeBytes = size,
+                                isVideo = false
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        list
+    }
+
     fun selectVideo(uri: Uri, pendingCustomCoverUri: Uri? = null) {
         _currentTab.value = AppTab.STUDIO
         viewModelScope.launch {
             try {
-                val metadata = motionPhotoBuilder.inspectVideoMetadata(uri)
+                // 先将外部视频 Uri 稳定缓存至应用本地私有缓存文件，彻底避免 ContentProvider 管道或云端相册句柄失效
+                val (localPlayableUri, originalName) = motionPhotoBuilder.cacheVideoUriToLocalFile(
+                    sourceUri = uri,
+                    cacheFileName = "studio_active_source.mp4"
+                )
+                val metadata = motionPhotoBuilder.inspectVideoMetadata(localPlayableUri, originalName)
                 val initialTrimEnd = metadata.durationMs
-                val defaultCoverUs = (metadata.durationMs.coerceAtMost(2000L) / 4L) * 1000L
-                val initialCover = motionPhotoBuilder.extractPreviewFrame(uri, defaultCoverUs)
+                val defaultCoverUs = ((metadata.durationMs.coerceAtMost(2000L) / 4L) * 1000L).coerceAtLeast(1000L)
+                val initialCover = motionPhotoBuilder.extractPreviewFrame(localPlayableUri, defaultCoverUs)
                 val customCoverName = pendingCustomCoverUri?.let { queryFileNameAsync(it) }
 
                 val editingState = StudioState.Editing(
-                    videoUri = uri,
+                    videoUri = localPlayableUri,
                     metadata = metadata,
                     coverPreviewBitmap = initialCover,
                     coverTimeUs = defaultCoverUs,
@@ -291,12 +416,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _studioState.value = editingState
 
                 val thumbs = motionPhotoBuilder.extractTimelineThumbnails(
-                    videoUri = uri,
+                    videoUri = localPlayableUri,
                     durationMs = metadata.durationMs,
                     count = 8
                 )
                 val current = _studioState.value
-                if (current is StudioState.Editing && current.videoUri == uri) {
+                if (current is StudioState.Editing && current.videoUri == localPlayableUri) {
                     _studioState.value = current.copy(
                         timelineThumbnails = thumbs,
                         isLoadingThumbnails = false
@@ -304,7 +429,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Exception) {
                 _studioState.value = StudioState.Error(
-                    message = "无法解析所选视频：${e.localizedMessage ?: "未知错误"}",
+                    message = "无法解析所选视频：${e.localizedMessage ?: "请确认视频保存在手机本地"}",
                     previousUri = uri
                 )
             }
@@ -330,17 +455,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _studioState.value = StudioState.Converting(
                     progress = idx.toFloat() / uris.size.toFloat(),
                     stage = MotionPhotoBuilder.ConversionProgress.Stage.EXTRACTING_FRAME,
-                    detailMessage = "$batchLabel：正在解析视频轨道...",
+                    detailMessage = "$batchLabel：正在读取本地视频轨道...",
                     format = MotionPhotoBuilder.OutputFormat.UNIVERSAL,
                     batchInfo = batchLabel
                 )
 
+                val (localBatchUri, origName) = motionPhotoBuilder.cacheVideoUriToLocalFile(
+                    sourceUri = uri,
+                    cacheFileName = "studio_batch_source.mp4"
+                )
                 val meta = try {
-                    motionPhotoBuilder.inspectVideoMetadata(uri)
+                    motionPhotoBuilder.inspectVideoMetadata(localBatchUri, origName)
                 } catch (_: Exception) {
                     null
                 }
-                val defaultCoverUs = ((meta?.durationMs ?: 2000L).coerceAtMost(2000L) / 4L) * 1000L
+                val defaultCoverUs = (((meta?.durationMs ?: 2000L).coerceAtMost(2000L) / 4L) * 1000L).coerceAtLeast(1000L)
 
                 val config = MotionPhotoBuilder.ConversionConfig(
                     frameTimeUs = defaultCoverUs,
@@ -349,7 +478,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
 
                 motionPhotoBuilder.convertVideoToMotionPhoto(
-                    videoUri = uri,
+                    videoUri = localBatchUri,
                     config = config,
                     onProgress = { prog ->
                         val overall = (idx + prog.progress) / uris.size.toFloat()
@@ -370,7 +499,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             refreshHistoryFiles()
             val finalResult = lastSuccess
             if (finalResult != null) {
-                showBannerMessage("批量合成完成！共成功导出 $successCount 张实况照片至系统相册")
+                showBannerMessage("批量合成完成：共生成 $successCount 张，保存结果请以各文件为准")
                 _studioState.value = StudioState.Success(
                     result = finalResult,
                     batchCount = successCount
@@ -550,6 +679,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 在合成成功页一键额外导出微信 GIF 动图
+     */
+    fun exportSuccessResultAsWeChatGif() {
+        val current = _studioState.value as? StudioState.Success ?: return
+        if (current.isExportingGif) return
+        _studioState.value = current.copy(isExportingGif = true)
+        viewModelScope.launch {
+            MotionPhotoInspector.inspectFile(getApplication(), current.result.localFile).fold(
+                onSuccess = { report ->
+                    val videoSource = report.extractedVideoFile ?: current.result.localFile
+                    motionPhotoBuilder.exportVideoToWeChatGif(
+                        videoUriOrFile = videoSource,
+                        trimStartMs = 0L,
+                        trimEndMs = current.result.videoDurationMs.coerceAtMost(3200L)
+                    ).fold(
+                        onSuccess = { gifPath ->
+                            refreshHistoryFiles()
+                            showBannerMessage("已导出微信 GIF 动图至相册：$gifPath")
+                        },
+                        onFailure = { err ->
+                            showBannerMessage("导出 GIF 失败：${err.localizedMessage}")
+                        }
+                    )
+                },
+                onFailure = {
+                    showBannerMessage("导出 GIF 失败：无法读取内嵌视频")
+                }
+            )
+            val latest = _studioState.value as? StudioState.Success
+            if (latest != null) {
+                _studioState.value = latest.copy(isExportingGif = false)
+            }
+        }
+    }
+
     fun resetStudio() {
         _studioState.value = StudioState.Idle
     }
@@ -570,6 +735,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun inspectMotionPhotoFile(file: File) {
+        if (file.name.endsWith(".gif", ignoreCase = true)) {
+            showBannerMessage("这是微信 GIF 动图文件，可直接点击右侧分享按钮发送至微信")
+            return
+        }
         _currentTab.value = AppTab.INSPECTOR
         viewModelScope.launch {
             _inspectorState.value = InspectorState.Inspecting
@@ -620,6 +789,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 在「检验」页将任意实况照片中的内嵌视频一键导出为微信 GIF 动图
+     */
+    fun exportInspectedWeChatGif() {
+        val current = _inspectorState.value as? InspectorState.ResultReady ?: return
+        val videoFile = current.report.extractedVideoFile ?: return
+        if (current.isExportingGif) return
+        _inspectorState.value = current.copy(isExportingGif = true)
+        viewModelScope.launch {
+            motionPhotoBuilder.exportVideoToWeChatGif(
+                videoUriOrFile = videoFile,
+                trimStartMs = 0L,
+                trimEndMs = 3000L
+            ).fold(
+                onSuccess = { path ->
+                    refreshHistoryFiles()
+                    val msg = "已导出微信 GIF 动图至相册：$path"
+                    showBannerMessage(msg)
+                    val latest = _inspectorState.value as? InspectorState.ResultReady
+                    if (latest != null) {
+                        _inspectorState.value = latest.copy(actionFeedback = msg, isExportingGif = false)
+                    }
+                },
+                onFailure = { err ->
+                    showBannerMessage("导出微信 GIF 失败：${err.localizedMessage}")
+                    val latest = _inspectorState.value as? InspectorState.ResultReady
+                    if (latest != null) {
+                        _inspectorState.value = latest.copy(isExportingGif = false)
+                    }
+                }
+            )
+        }
+    }
+
     fun repairInspectedMotionPhoto() {
         val current = _inspectorState.value as? InspectorState.ResultReady ?: return
         viewModelScope.launch {
@@ -646,17 +849,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val dir = File(getApplication<Application>().getExternalFilesDir(null), "MotionPhotos")
             val dateFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
             val items = dir.listFiles { f ->
-                f.isFile && (f.name.endsWith(".jpg", ignoreCase = true) || f.name.endsWith(".jpeg", ignoreCase = true))
+                f.isFile && (
+                    f.name.endsWith(".jpg", ignoreCase = true) ||
+                        f.name.endsWith(".jpeg", ignoreCase = true) ||
+                        f.name.endsWith(".gif", ignoreCase = true)
+                    )
             }?.map { f ->
                 val lastMod = f.lastModified()
                 val sizeStr = formatFileSize(f.length())
                 val dateStr = dateFormat.format(Date(lastMod))
+                val isGif = f.name.endsWith(".gif", ignoreCase = true)
+                val typeTag = if (isGif) "微信GIF动图" else "实况照片"
                 HistoryPhotoItem(
                     file = f,
                     key = f.absolutePath,
                     name = f.name,
-                    formattedMeta = "$sizeStr · $dateStr",
-                    lastModified = lastMod
+                    formattedMeta = "$typeTag · $sizeStr · $dateStr",
+                    lastModified = lastMod,
+                    isGif = isGif
                 )
             }?.sortedByDescending { it.lastModified } ?: emptyList()
             _historyFiles.value = items

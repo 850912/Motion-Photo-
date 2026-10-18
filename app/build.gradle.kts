@@ -11,8 +11,8 @@ android {
         applicationId = "com.motionphoto.studio"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -110,9 +110,10 @@ dependencies {
     // Adobe XMP metadata library
     implementation("com.adobe.xmp:xmpcore:6.1.11")
 
-    // Coil for image & video frame loading
+    // Coil for image, video frame & animated GIF loading
     implementation("io.coil-kt:coil-compose:2.5.0")
     implementation("io.coil-kt:coil-video:2.5.0")
+    implementation("io.coil-kt:coil-gif:2.5.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

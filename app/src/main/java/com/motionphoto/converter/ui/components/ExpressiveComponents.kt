@@ -1,12 +1,23 @@
 package com.motionphoto.converter.ui.components
 
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.graphics.Picture
 import android.graphics.RenderEffect
+import android.graphics.RenderNode
 import android.graphics.RuntimeShader
 import android.graphics.Shader
+import android.graphics.drawable.AnimatedImageDrawable
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Build
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -41,6 +52,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesomeMotion
 import androidx.compose.material.icons.rounded.Collections
+import androidx.compose.material.icons.rounded.GifBox
 import androidx.compose.material.icons.rounded.MotionPhotosOn
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
@@ -52,7 +64,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,6 +75,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -70,9 +85,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.draw
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -90,14 +109,155 @@ import com.motionphoto.converter.ui.MainViewModel
 import com.motionphoto.converter.ui.theme.ExpressiveMotion
 import com.motionphoto.converter.ui.theme.expressiveBounceClick
 import java.io.File
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
+
+/**
+ * 实时背景捕获状态 (Real-Time GPU Backdrop Capture State)
+ * 参考 Kyant0/AndroidLiquidGlass、Kashif-E/KMPLiquidGlass 与 QWEA0/Liquid-Glass-Android：
+ * - 在 Android 10+ (API 29+) 上使用硬件加速 `RenderNode` (GPU DisplayList) 零拷贝录制底层页面内容，
+ *   完美支持 `Bitmap.Config.HARDWARE` 硬件位图、嵌套图层与实时滚动内容，绝不触发软件画布崩溃；
+ * - 在 Android 8.0~9.0 (API 26~28) 上平稳回退至 `Picture` 录制。
+ */
+@Stable
+class LiquidGlassBackdropState {
+    val renderNode: RenderNode? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        RenderNode("LiquidGlassBackdrop")
+    } else {
+        null
+    }
+    val fallbackPicture: Picture = Picture()
+    var sourceWindowPosition: Offset by mutableStateOf(Offset.Zero)
+    var recordedWidth: Int by mutableIntStateOf(0)
+    var recordedHeight: Int by mutableIntStateOf(0)
+    var frameTick: Int by mutableIntStateOf(0)
+}
+
+@Composable
+fun rememberLiquidGlassBackdropState(): LiquidGlassBackdropState {
+    return remember { LiquidGlassBackdropState() }
+}
+
+/**
+ * 标记主页面内容为液态玻璃的 GPU 实时采样背景源
+ */
+fun Modifier.liquidGlassBackdropSource(
+    state: LiquidGlassBackdropState,
+    enabled: Boolean = true
+): Modifier = this
+    .onGloballyPositioned { coords ->
+        state.sourceWindowPosition = coords.positionInWindow()
+    }
+    .drawWithContent {
+        drawContent()
+        if (enabled && size.width > 1f && size.height > 1f) {
+            val w = size.width.toInt()
+            val h = size.height.toInt()
+            val node = state.renderNode
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && node != null) {
+                try {
+                    node.setPosition(0, 0, w, h)
+                    val recCanvas = node.beginRecording(w, h)
+                    try {
+                        draw(
+                            density = this,
+                            layoutDirection = this.layoutDirection,
+                            canvas = androidx.compose.ui.graphics.Canvas(recCanvas),
+                            size = this.size
+                        ) {
+                            this@drawWithContent.drawContent()
+                        }
+                    } finally {
+                        node.endRecording()
+                    }
+                    state.recordedWidth = w
+                    state.recordedHeight = h
+                    state.frameTick = (state.frameTick + 1) and 0x7FFFFFFF
+                } catch (_: Throwable) {
+                }
+            } else {
+                try {
+                    val picCanvas = state.fallbackPicture.beginRecording(w, h)
+                    try {
+                        draw(
+                            density = this,
+                            layoutDirection = this.layoutDirection,
+                            canvas = androidx.compose.ui.graphics.Canvas(picCanvas),
+                            size = this.size
+                        ) {
+                            this@drawWithContent.drawContent()
+                        }
+                    } finally {
+                        state.fallbackPicture.endRecording()
+                    }
+                    state.recordedWidth = w
+                    state.recordedHeight = h
+                    state.frameTick = (state.frameTick + 1) and 0x7FFFFFFF
+                } catch (_: Throwable) {
+                }
+            }
+        }
+    }
+
+/**
+ * 重力感应动态光源方向追踪 (参考 QWEA0/Liquid-Glass-Android `sensorHighlight`)
+ * 随手机握持倾角实时平滑偏移液态玻璃边缘高光角度
+ */
+@Composable
+private fun rememberDeviceTiltLightVector(enabled: Boolean): Offset {
+    val context = LocalContext.current
+    var lightVec by remember { mutableStateOf(Offset(-0.58f, -0.81f)) }
+
+    DisposableEffect(context, enabled) {
+        if (!enabled) {
+            return@DisposableEffect onDispose {}
+        }
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY)
+            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+        if (sensorManager == null || sensor == null) {
+            return@DisposableEffect onDispose {}
+        }
+
+        var smoothX = -0.58f
+        var smoothY = -0.81f
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val values = event?.values ?: return
+                if (values.size < 2) return
+                val rawX = (-values[0] / 9.81f).coerceIn(-1f, 1f)
+                val rawY = (-values[1] / 9.81f).coerceIn(-1f, 1f)
+                val targetX = (rawX * 0.65f - 0.35f).coerceIn(-1f, 1f)
+                val targetY = (rawY * 0.55f - 0.55f).coerceIn(-1f, -0.15f)
+                smoothX += (targetX - smoothX) * 0.14f
+                smoothY += (targetY - smoothY) * 0.14f
+                val len = sqrt(smoothX * smoothX + smoothY * smoothY).coerceAtLeast(0.001f)
+                lightVec = Offset(smoothX / len, smoothY / len)
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+
+        try {
+            sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+        } catch (_: Throwable) {}
+
+        onDispose {
+            try {
+                sensorManager.unregisterListener(listener)
+            } catch (_: Throwable) {}
+        }
+    }
+    return lightVec
+}
 
 /**
  * 1. Google Material 3 Expressive (MD3E) 灵动多叶徽章 (Cookie / Flower Shape Morphing)
- * 支持呼吸缩放与平滑花瓣旋转，同时缓存 Path 与 Brush 保证 120Hz 满帧渲染
  */
 @Composable
 fun ExpressiveMorphingBadge(
@@ -365,7 +525,6 @@ fun ExpressiveWavyCircularHalo(
 
 /**
  * 4. Google M3 Expressive 连通形变按钮组 (Connected Button Group)
- * 选中项动态拉伸宽度权重 + 圆角从方枕形弹跳过渡为胶囊圆角
  */
 @Composable
 fun <T> ExpressiveConnectedButtonGroup(
@@ -471,8 +630,11 @@ enum class AppTab(
 }
 
 /**
- * 开源项目 Kyant0/AndroidLiquidGlass (Apache-2.0) 光学折射与色散着色器 (AGSL)
- * 仅作用于 Dock 栏底板背景层，绝不模糊或扭曲前景导航图标与文字
+ * 深度还原 Kyant0/AndroidLiquidGlass + QWEA0/Liquid-Glass-Android 2.0 光学透镜着色器 (AGSL)：
+ * 1. 解析主胶囊与选中 Tab 水滴胶囊的双重圆角矩形 SDF 梯度法线 (`gradSdRoundedBox`)，实现水滴透镜融合折射
+ * 2. 采用 `circleBevel` 四分之一圆弧 + 逆幂律 (`inversePower`) 复合剖面，在胶囊边缘形成细腻的 iOS 26 / Kyant 光学折叠环
+ * 3. 七通道光谱棱镜色散采样 (`R / O / Y / G / C / B / V`) + 背景色彩 Vibrancy 增艳矩阵
+ * 4. 重力感应动态光源 (`lightDir`) + 跟随选中 Tab 的焦散水滴透镜 (`dropletCenter` / `dropletHalfSize`)
  */
 private const val KYANT_LIQUID_GLASS_AGSL = """
     uniform shader content;
@@ -482,54 +644,114 @@ private const val KYANT_LIQUID_GLASS_AGSL = """
     uniform float dispersionStrength;
     uniform float specularStrength;
     uniform float4 tintColor;
+    uniform float2 dropletCenter;
+    uniform float2 dropletHalfSize;
+    uniform float2 lightDir;
 
     float sdRoundedBox(float2 p, float2 b, float r) {
         float2 q = abs(p) - b + r;
         return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
     }
 
+    float2 gradSdRoundedBox(float2 p, float2 b, float r) {
+        float2 q = abs(p) - b + r;
+        float2 s = sign(p);
+        if (q.x > 0.0 && q.y > 0.0) {
+            return s * normalize(q);
+        } else if (q.x > q.y) {
+            return float2(s.x, 0.0);
+        } else {
+            return float2(0.0, s.y);
+        }
+    }
+
+    float circleBevel(float x) {
+        float cx = clamp(x, 0.0, 1.0);
+        return 1.0 - sqrt(max(0.0, 1.0 - cx * cx));
+    }
+
     half4 main(float2 coord) {
         float2 halfSize = resolution * 0.5;
         float2 p = coord - halfSize;
-        float r = clamp(cornerRadius, 4.0, min(halfSize.x, halfSize.y));
-        float d = sdRoundedBox(p, halfSize, r);
+        float r = clamp(cornerRadius, 6.0, min(halfSize.x, halfSize.y));
+        float dOuter = sdRoundedBox(p, halfSize, r);
 
-        // 边缘透镜折射带宽
-        float rimWidth = max(r * 0.85, 18.0);
-        float edgeFactor = clamp(1.0 + d / rimWidth, 0.0, 1.0);
-        float lensCurve = edgeFactor * edgeFactor * (3.0 - 2.0 * edgeFactor);
+        // 1. 外层 Dock 胶囊边缘四分之一圆弧 + 逆幂律透镜折射带
+        float bevelWidth = max(r * 0.95, 24.0);
+        float rimProgress = clamp(1.0 + dOuter / bevelWidth, 0.0, 1.0);
+        float lensOuter = circleBevel(rimProgress) * (0.65 + 0.35 * rimProgress);
+        float2 sdfNormalOuter = gradSdRoundedBox(p, halfSize, r);
+        float2 radialNormal = length(p) > 0.001 ? normalize(p) : float2(0.0, 0.0);
+        float2 normalOuter = normalize(mix(sdfNormalOuter, radialNormal, 0.20));
 
-        // 计算指向中心的折射法线
-        float2 normal = length(p) > 0.001 ? normalize(p) : float2(0.0, 0.0);
-        float2 offset = -normal * lensCurve * refractionStrength * 18.0;
+        // 2. 内部选中 Tab 液态水滴胶囊 (Droplet Lens) 局部凸透镜微折射
+        float2 pDrop = coord - dropletCenter;
+        float rDrop = min(dropletHalfSize.x, dropletHalfSize.y);
+        float dDrop = sdRoundedBox(pDrop, dropletHalfSize, rDrop);
+        float dropRim = clamp(1.0 - abs(dDrop) / 18.0, 0.0, 1.0);
+        float2 normalDrop = gradSdRoundedBox(pDrop, dropletHalfSize, rDrop);
 
-        // 棱镜色散 (Chromatic Aberration R/G/B 通道分离采样)
-        float2 disp = normal * lensCurve * dispersionStrength * 4.5;
-        half4 colR = content.eval(clamp(coord + offset - disp, float2(0.0), resolution));
-        half4 colG = content.eval(clamp(coord + offset, float2(0.0), resolution));
-        half4 colB = content.eval(clamp(coord + offset + disp, float2(0.0), resolution));
-        half4 baseCol = half4(colR.r, colG.g, colB.b, colG.a);
+        // 综合折射位移向量
+        float maxRefractPx = (20.0 + r * 0.55) * refractionStrength;
+        float2 refractOffset = (-normalOuter * lensOuter * maxRefractPx)
+            - (normalDrop * circleBevel(dropRim) * 8.5 * refractionStrength);
 
-        // 叠加玻璃色调与漫射浓度
-        half3 tinted = mix(baseCol.rgb, half3(tintColor.rgb), half(tintColor.a));
+        // 3. 七通道光谱棱镜色散采样 (ROYGCBV)
+        float2 dispDir = normalize(normalOuter + normalDrop * 0.35 + float2(0.0001, 0.0001));
+        float dispMag = (lensOuter * (0.40 + 0.60 * rimProgress) + dropRim * 0.28) * dispersionStrength * 4.2;
+        float2 dispStep = dispDir * dispMag;
+        float2 minBound = float2(1.0, 1.0);
+        float2 maxBound = max(resolution - 1.0, minBound);
 
-        // 菲涅尔左上光源边缘高光
-        float lightDir = clamp((-normal.x * 0.65 - normal.y * 0.75) * 0.5 + 0.5, 0.0, 1.0);
-        float rimGlow = pow(edgeFactor, 2.4) * specularStrength * (0.35 + 0.65 * lightDir);
-        tinted += half3(rimGlow * 0.55);
+        float2 baseCoord = coord + refractOffset;
+        half4 cR = content.eval(clamp(baseCoord - dispStep * 2.4, minBound, maxBound));
+        half4 cO = content.eval(clamp(baseCoord - dispStep * 1.6, minBound, maxBound));
+        half4 cY = content.eval(clamp(baseCoord - dispStep * 0.8, minBound, maxBound));
+        half4 cG = content.eval(clamp(baseCoord,                  minBound, maxBound));
+        half4 cC = content.eval(clamp(baseCoord + dispStep * 0.8, minBound, maxBound));
+        half4 cB = content.eval(clamp(baseCoord + dispStep * 1.6, minBound, maxBound));
+        half4 cV = content.eval(clamp(baseCoord + dispStep * 2.4, minBound, maxBound));
 
-        return half4(clamp(tinted, half3(0.0), half3(1.0)), baseCol.a);
+        half3 refractedRgb = half3(
+            (cR.r * 0.50 + cO.r * 0.32 + cY.r * 0.18),
+            (cY.g * 0.22 + cG.g * 0.56 + cC.g * 0.22),
+            (cC.b * 0.18 + cB.b * 0.48 + cV.b * 0.34)
+        );
+
+        // 4. Kyant Vibrancy 色彩增艳与通透对比度提升
+        half luma = dot(refractedRgb, half3(0.299, 0.587, 0.114));
+        half3 vibrantRgb = clamp(mix(half3(luma), refractedRgb, half(1.34)), half3(0.0), half3(1.0));
+
+        // 5. 混合清透玻璃色调（保留底层实时滚动画面细节）
+        half3 tinted = mix(vibrantRgb, half3(tintColor.rgb), half(tintColor.a));
+
+        // 6. 重力感应双瓣对称高光 (pow 4.5 角度瓣) + 选中水滴焦散光晕
+        float2 n = normalOuter;
+        float primaryLobe = pow(clamp(dot(n, lightDir) * 0.5 + 0.5, 0.0, 1.0), 3.5);
+        float oppositeLobe = pow(clamp(dot(n, -lightDir) * 0.5 + 0.5, 0.0, 1.0), 4.2) * 0.65;
+        float rimSpecular = pow(rimProgress, 2.8) * specularStrength * (0.24 + 0.76 * (primaryLobe + oppositeLobe));
+
+        float dropSpecular = pow(dropRim, 3.2) * specularStrength * 0.28 *
+            clamp(dot(normalDrop, lightDir) * 0.5 + 0.5, 0.0, 1.0);
+
+        tinted += half3(rimSpecular * 0.72 + dropSpecular);
+
+        return half4(clamp(tinted, half3(0.0), half3(1.0)), 1.0);
     }
 """
 
 /**
- * 独立的 Dock 栏液态玻璃底板层修饰符
- * 仅对 Dock 栏背景胶囊本身应用光学透镜折射、模糊、菲涅尔高光与色散光圈，
- * 前景的导航文字、图标与选中胶囊位于上层独立图层，保持 100% 清晰锐利。
+ * 独立的 Dock 栏实时 GPU 背景液态玻璃底板层修饰符：
+ * - 通过硬件加速 `RenderNode` 零拷贝重绘 Dock 栏正下方的滚动页面内容，并执行「先高斯模糊 -> 后 AGSL 双圆角 SDF 透镜折射与七通道光谱色散」
+ * - 前景的导航文字、图标与选中胶囊位于上层独立兄弟图层，100% 清晰锐利，绝不被模糊或扭曲
  */
 @Composable
 fun Modifier.kyantLiquidGlassDockBackdrop(
     config: MainViewModel.LiquidGlassConfig,
+    backdropState: LiquidGlassBackdropState?,
+    dockWindowPosition: Offset,
+    activeFocusFractionX: Float,
+    lightDir: Offset,
     surfaceColor: Color,
     primaryColor: Color,
     secondaryColor: Color,
@@ -559,82 +781,102 @@ fun Modifier.kyantLiquidGlassDockBackdrop(
         }
     }
 
-    val baseFrostAlpha = config.tintAlpha.coerceIn(0.05f, 0.88f)
+    // 降低底板遮罩不透明度，让底层 RenderNode 实时捕获的页面色彩与边缘充分透射并产生明显的透镜折射感
+    val baseFrostAlpha = (config.tintAlpha * 0.52f).coerceIn(0.06f, 0.58f)
     val glassBaseColor = if (isDark) {
-        Color(0xFF1E1E2A).copy(alpha = (baseFrostAlpha + 0.18f).coerceAtMost(0.92f))
+        Color(0xFF161622).copy(alpha = baseFrostAlpha)
     } else {
-        Color(0xFFFFFFFF).copy(alpha = (baseFrostAlpha + 0.22f).coerceAtMost(0.94f))
+        Color(0xFFFFFFFF).copy(alpha = (baseFrostAlpha + 0.06f).coerceAtMost(0.64f))
     }
 
     return this
         .shadow(
             elevation = (10f + config.specularStrength * 12f).dp,
             shape = shape,
-            spotColor = primaryColor.copy(alpha = 0.30f),
+            spotColor = primaryColor.copy(alpha = 0.34f),
             ambientColor = primaryColor.copy(alpha = 0.18f)
         )
         .clip(shape)
-        // 1. 仅在背景层内部应用 AGSL 光学折射与毛玻璃模糊，然后再在前景绘制清晰锐利的高光边框
         .drawWithCache {
             val cr = CornerRadius(cornerRadiusPx, cornerRadiusPx)
-            val rimAlpha = (0.30f + config.specularStrength * 0.65f).coerceIn(0f, 1f)
-            val dispAlpha = (config.dispersionStrength * 0.60f).coerceIn(0f, 0.85f)
+            val rimAlpha = (0.38f + config.specularStrength * 0.62f).coerceIn(0f, 1f)
+            val dispAlpha = (config.dispersionStrength * 0.72f).coerceIn(0f, 0.92f)
+
+            val innerLensBrush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = (0.14f + config.refractionStrength * 0.18f).coerceAtMost(0.38f)),
+                    glassBaseColor,
+                    primaryColor.copy(alpha = (0.06f + config.dispersionStrength * 0.12f).coerceAtMost(0.22f))
+                )
+            )
+
+            val focusX = (size.width * activeFocusFractionX).coerceIn(0f, size.width)
+            val causticGlowBrush = Brush.radialGradient(
+                colors = listOf(
+                    primaryColor.copy(alpha = 0.24f * config.refractionStrength),
+                    secondaryColor.copy(alpha = 0.14f * config.dispersionStrength),
+                    Color.Transparent
+                ),
+                center = Offset(focusX, size.height * 0.45f),
+                radius = (size.width * 0.48f).coerceAtLeast(1f)
+            )
+
+            val lightStart = Offset(
+                x = size.width * (0.5f + lightDir.x * 0.5f),
+                y = size.height * (0.5f + lightDir.y * 0.5f)
+            )
+            val lightEnd = Offset(
+                x = size.width * (0.5f - lightDir.x * 0.5f),
+                y = size.height * (0.5f - lightDir.y * 0.5f)
+            )
 
             val topHighlightBrush = Brush.linearGradient(
                 colors = listOf(
                     Color.White.copy(alpha = rimAlpha),
-                    primaryColor.copy(alpha = dispAlpha * 0.70f),
-                    Color.White.copy(alpha = rimAlpha * 0.25f),
-                    Color(0xFF70D6FF).copy(alpha = dispAlpha * 0.60f),
-                    Color.White.copy(alpha = rimAlpha * 0.75f)
+                    primaryColor.copy(alpha = dispAlpha * 0.76f),
+                    Color.White.copy(alpha = rimAlpha * 0.24f),
+                    Color(0xFF70D6FF).copy(alpha = dispAlpha * 0.68f),
+                    Color.White.copy(alpha = rimAlpha * 0.84f)
                 ),
-                start = Offset.Zero,
-                end = Offset(size.width, size.height)
+                start = lightStart,
+                end = lightEnd
             )
-
-            val innerLensBrush = Brush.verticalGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = (0.22f + config.refractionStrength * 0.30f).coerceAtMost(0.62f)),
-                    glassBaseColor,
-                    primaryColor.copy(alpha = (0.08f + config.dispersionStrength * 0.18f).coerceAtMost(0.32f))
-                )
-            )
-
-            val causticGlowBrush = Brush.radialGradient(
-                colors = listOf(
-                    primaryColor.copy(alpha = 0.18f * config.refractionStrength),
-                    secondaryColor.copy(alpha = 0.12f * config.dispersionStrength),
-                    Color.Transparent
-                ),
-                center = Offset(size.width * 0.28f, size.height * 0.25f),
-                radius = size.width * 0.75f
-            )
-
-            val topSpecularBrush = Brush.verticalGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.28f * config.specularStrength),
-                    Color.Transparent
-                ),
-                startY = 0f,
-                endY = size.height * 0.52f
-            )
-            val rimStroke = Stroke(width = (1.3f + config.specularStrength * 1.1f).dp.toPx())
+            val rimStroke = Stroke(width = (1.4f + config.specularStrength * 1.1f).dp.toPx())
 
             onDrawBehind {
+                // 1. 绘制底层实时捕获的 GPU DisplayList (RenderNode / Picture)，使 Dock 栏实时透视并折射下方滚动的页面元素
+                drawRect(color = surfaceColor)
+                if (backdropState != null && backdropState.frameTick > 0 && backdropState.recordedWidth > 0) {
+                    val dx = backdropState.sourceWindowPosition.x - dockWindowPosition.x
+                    val dy = backdropState.sourceWindowPosition.y - dockWindowPosition.y
+                    val nativeCanvas = drawContext.canvas.nativeCanvas
+                    val saveCount = nativeCanvas.save()
+                    try {
+                        nativeCanvas.translate(dx, dy)
+                        val node = backdropState.renderNode
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && node != null && node.hasDisplayList()) {
+                            nativeCanvas.drawRenderNode(node)
+                        } else if (backdropState.fallbackPicture.width > 0) {
+                            nativeCanvas.drawPicture(backdropState.fallbackPicture)
+                        }
+                    } catch (_: Throwable) {
+                    } finally {
+                        nativeCanvas.restoreToCount(saveCount)
+                    }
+                }
+
+                // 2. 叠加清透玻璃漫射层、动态水滴焦散与随重力感应旋转的菲涅尔棱镜边框
                 drawRoundRect(brush = innerLensBrush, cornerRadius = cr)
                 drawRoundRect(brush = causticGlowBrush, cornerRadius = cr)
-                drawRoundRect(brush = topSpecularBrush, cornerRadius = cr)
                 drawRoundRect(brush = topHighlightBrush, cornerRadius = cr, style = rimStroke)
             }
         }
         .graphicsLayer {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && cachedRuntimeShader != null) {
                 try {
-                    cachedRuntimeShader.setFloatUniform(
-                        "resolution",
-                        size.width.coerceAtLeast(1f),
-                        size.height.coerceAtLeast(1f)
-                    )
+                    val w = size.width.coerceAtLeast(1f)
+                    val h = size.height.coerceAtLeast(1f)
+                    cachedRuntimeShader.setFloatUniform("resolution", w, h)
                     cachedRuntimeShader.setFloatUniform("cornerRadius", cornerRadiusPx)
                     cachedRuntimeShader.setFloatUniform("refractionStrength", config.refractionStrength)
                     cachedRuntimeShader.setFloatUniform("dispersionStrength", config.dispersionStrength)
@@ -644,13 +886,29 @@ fun Modifier.kyantLiquidGlassDockBackdrop(
                         surfaceColor.red,
                         surfaceColor.green,
                         surfaceColor.blue,
-                        config.tintAlpha * 0.45f
+                        (config.tintAlpha * 0.34f).coerceIn(0.04f, 0.45f)
+                    )
+                    cachedRuntimeShader.setFloatUniform(
+                        "dropletCenter",
+                        w * activeFocusFractionX,
+                        h * 0.50f
+                    )
+                    cachedRuntimeShader.setFloatUniform(
+                        "dropletHalfSize",
+                        w * 0.14f,
+                        h * 0.39f
+                    )
+                    cachedRuntimeShader.setFloatUniform(
+                        "lightDir",
+                        lightDir.x,
+                        lightDir.y
                     )
                     val shaderEffect = RenderEffect.createRuntimeShaderEffect(cachedRuntimeShader, "content")
+                    // 遵循 Kyant0/AndroidLiquidGlass 光学顺序：先对背景执行高斯模糊 (inner)，再进入 AGSL 双 SDF 透镜折射与七波段色散 (outer)
                     renderEffect = if (blurPx > 0.5f) {
                         val blurEffect = RenderEffect.createBlurEffect(
-                            blurPx * 0.28f,
-                            blurPx * 0.28f,
+                            blurPx * 0.62f,
+                            blurPx * 0.62f,
                             Shader.TileMode.CLAMP
                         )
                         RenderEffect.createChainEffect(shaderEffect, blurEffect).asComposeRenderEffect()
@@ -665,31 +923,51 @@ fun Modifier.kyantLiquidGlassDockBackdrop(
 
 /**
  * 底部悬浮液态玻璃 Dock 栏：
- * - 已移除右下角多余的添加图片按钮
+ * - 实时折射并模糊 Dock 栏下方的页面滚动内容 (`backdropState`)
  * - 液态玻璃折射/模糊仅作用于底层 `kyantLiquidGlassDockBackdrop`，上层文字与图标 100% 清晰锐利
- * - 采用 Google M3 Expressive 弹簧形变（选中项弹性拉伸、圆角方枕→胶囊形变、图标微弹跳与标签丝滑展开）
+ * - 支持重力感应动态高光追踪与选中 Tab 水滴透镜聚焦
  */
 @Composable
 fun ExpressiveFloatingToolbar(
     currentTab: AppTab,
     onSelectTab: (AppTab) -> Unit,
+    backdropState: LiquidGlassBackdropState? = null,
     liquidGlassConfig: MainViewModel.LiquidGlassConfig = MainViewModel.LiquidGlassConfig(),
     isDark: Boolean = false,
     onOpenLiquidGlassTuner: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    var dockWindowPosition by remember { mutableStateOf(Offset.Zero) }
+    val lightDir = rememberDeviceTiltLightVector(enabled = liquidGlassConfig.enabled)
+
+    val targetFocusFraction = remember(currentTab) {
+        (currentTab.ordinal + 0.5f) / (AppTab.Entries.size + 0.55f)
+    }
+    val animatedFocusFraction by animateFloatAsState(
+        targetValue = targetFocusFraction,
+        animationSpec = ExpressiveMotion.defaultSpatial(),
+        label = "dock_light_focus"
+    )
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 18.dp, vertical = 10.dp)
             .height(66.dp)
+            .onGloballyPositioned { coords ->
+                dockWindowPosition = coords.positionInWindow()
+            }
     ) {
-        // 图层 1：独立的液态玻璃光学背景层（仅对 Dock 栏自身底板生效，不影响上层文字和图标）
+        // 图层 1：独立的实时 GPU 背景采样液态玻璃底板层（仅对 Dock 栏自身底板生效，不模糊前景文字和图标）
         Box(
             modifier = Modifier
                 .matchParentSize()
                 .kyantLiquidGlassDockBackdrop(
                     config = liquidGlassConfig,
+                    backdropState = backdropState,
+                    dockWindowPosition = dockWindowPosition,
+                    activeFocusFractionX = animatedFocusFraction,
+                    lightDir = lightDir,
                     surfaceColor = MaterialTheme.colorScheme.surface,
                     primaryColor = MaterialTheme.colorScheme.primary,
                     secondaryColor = MaterialTheme.colorScheme.tertiary,
@@ -697,7 +975,7 @@ fun ExpressiveFloatingToolbar(
                 )
         )
 
-        // 图层 2：前景高清导航内容层（文字与图标不经过 RenderEffect 模糊或色散，保持锐利）
+        // 图层 2：前景高清导航内容层（文字与图标不经过 RenderEffect 模糊或色散，保持 100% 锐利）
         Row(
             modifier = Modifier
                 .fillMaxSize()
@@ -725,7 +1003,7 @@ fun ExpressiveFloatingToolbar(
                 )
 
                 val activeAlpha = if (liquidGlassConfig.enabled) {
-                    (0.72f + liquidGlassConfig.tintAlpha * 0.22f).coerceIn(0.65f, 0.95f)
+                    (0.58f + liquidGlassConfig.tintAlpha * 0.24f).coerceIn(0.52f, 0.88f)
                 } else 1f
 
                 val pillColor by animateColorAsState(
@@ -763,8 +1041,8 @@ fun ExpressiveFloatingToolbar(
                                     width = 1.dp,
                                     brush = Brush.linearGradient(
                                         listOf(
-                                            Color.White.copy(alpha = 0.70f * liquidGlassConfig.specularStrength),
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)
+                                            Color.White.copy(alpha = 0.82f * liquidGlassConfig.specularStrength),
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
                                         )
                                     ),
                                     shape = itemShape
@@ -823,7 +1101,7 @@ fun ExpressiveFloatingToolbar(
                     .clip(CircleShape)
                     .background(
                         MaterialTheme.colorScheme.secondaryContainer.copy(
-                            alpha = if (liquidGlassConfig.enabled) 0.78f else 0.92f
+                            alpha = if (liquidGlassConfig.enabled) 0.72f else 0.92f
                         )
                     )
                     .expressiveBounceClick(pressedScale = 0.88f) {
@@ -843,7 +1121,105 @@ fun ExpressiveFloatingToolbar(
 }
 
 /**
- * 6. 按需加载 (Lazy ExoPlayer) 的实况照片交互预览卡
+ * 6. 原生硬件加速 GIF 动图循环预览卡 (AnimatedImageDrawable / ImageDecoder)
+ * 确保在 App 内制作完成或浏览历史作品时，微信 GIF 动图直接动态循环播放
+ */
+@Composable
+fun AnimatedGifPreviewCard(
+    gifFile: File,
+    resolutionLabel: String,
+    fileSizeBytes: Long,
+    modifier: Modifier = Modifier
+) {
+    val sizeKb = (fileSizeBytes / 1024L).coerceAtLeast(1L)
+    val isWeChatStickerReady = fileSizeBytes <= 1024L * 1024L
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .aspectRatio(4f / 3f)
+            .clip(RoundedCornerShape(28.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(
+                width = 1.5.dp,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(28.dp)
+            )
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                ImageView(ctx).apply {
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                }
+            },
+            update = { imageView ->
+                if (gifFile.exists()) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        try {
+                            val source = ImageDecoder.createSource(gifFile)
+                            val drawable = ImageDecoder.decodeDrawable(source)
+                            imageView.setImageDrawable(drawable)
+                            if (drawable is AnimatedImageDrawable) {
+                                drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                                drawable.start()
+                            }
+                        } catch (_: Throwable) {
+                            imageView.setImageBitmap(BitmapFactory.decodeFile(gifFile.absolutePath))
+                        }
+                    } else {
+                        imageView.setImageBitmap(BitmapFactory.decodeFile(gifFile.absolutePath))
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(14.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.GifBox,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = if (isWeChatStickerReady) "GIF 循环播放中 · 可直接添加为微信表情" else "高清 GIF 循环播放中",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(14.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.62f))
+                .padding(horizontal = 10.dp, vertical = 5.dp)
+        ) {
+            Text(
+                text = "$resolutionLabel · ${sizeKb} KB",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White
+            )
+        }
+    }
+}
+
+/**
+ * 7. 按需加载 (Lazy ExoPlayer) 的实况照片交互预览卡
  */
 @Composable
 fun LiveMotionPhotoPlayerCard(
@@ -893,6 +1269,7 @@ fun LiveMotionPhotoPlayerCard(
     val imageRequest = remember(context, coverImageModel) {
         ImageRequest.Builder(context)
             .data(coverImageModel)
+            .allowHardware(false)
             .crossfade(false)
             .build()
     }
@@ -1006,7 +1383,7 @@ fun LiveMotionPhotoPlayerCard(
                     .padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
                 Text(
-                    text = "$resolutionLabel · ${String.format("%.1fs", durationMs / 1000f)}",
+                    text = "$resolutionLabel · ${String.format(Locale.US, "%.1fs", durationMs / 1000f)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White
                 )

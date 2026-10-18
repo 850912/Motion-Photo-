@@ -15,8 +15,11 @@ import android.provider.MediaStore
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
+import android.app.Activity
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -73,6 +76,7 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.GifBox
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LightMode
@@ -141,10 +145,12 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import coil.decode.VideoFrameDecoder
 import coil.request.ImageRequest
 import coil.size.Precision
 import com.motionphoto.converter.R
 import com.motionphoto.converter.core.MotionPhotoBuilder
+import com.motionphoto.converter.ui.components.AnimatedGifPreviewCard
 import com.motionphoto.converter.ui.components.AppTab
 import com.motionphoto.converter.ui.components.ExpressiveConnectedButtonGroup
 import com.motionphoto.converter.ui.components.ExpressiveFloatingToolbar
@@ -152,6 +158,8 @@ import com.motionphoto.converter.ui.components.ExpressiveMorphingBadge
 import com.motionphoto.converter.ui.components.ExpressiveWavyCircularHalo
 import com.motionphoto.converter.ui.components.ExpressiveWavyLinearProgress
 import com.motionphoto.converter.ui.components.LiveMotionPhotoPlayerCard
+import com.motionphoto.converter.ui.components.liquidGlassBackdropSource
+import com.motionphoto.converter.ui.components.rememberLiquidGlassBackdropState
 import com.motionphoto.converter.ui.theme.ExpressiveMotion
 import com.motionphoto.converter.ui.theme.ExpressivePalette
 import com.motionphoto.converter.ui.theme.expressiveBounceClick
@@ -165,6 +173,91 @@ import kotlin.math.roundToInt
 private val PreviewModes = listOf("VIDEO", "COVER")
 private val QualityOptions = listOf(88, 95, 100)
 
+private enum class LocalMediaPickerPurpose(
+    val title: String,
+    val subtitle: String,
+    val isVideo: Boolean,
+    val isBatch: Boolean
+) {
+    SINGLE_VIDEO(
+        title = "选择本地视频",
+        subtitle = "直接读取本机 MediaStore 视频库，零云端延迟",
+        isVideo = true,
+        isBatch = false
+    ),
+    BATCH_VIDEOS(
+        title = "批量选择本地视频 (最多 12 个)",
+        subtitle = "勾选多个本机视频一键排队合成实况照片",
+        isVideo = true,
+        isBatch = true
+    ),
+    CUSTOM_COVER_IMAGE(
+        title = "选择本地高清封面图",
+        subtitle = "挑选一张本机静态照片作为实况封面",
+        isVideo = false,
+        isBatch = false
+    ),
+    REFERENCE_EXIF_IMAGE(
+        title = "选择本机相机样张 (克隆 EXIF)",
+        subtitle = "挑选一张本机原生相机拍的照片以克隆机型与镜头参数",
+        isVideo = false,
+        isBatch = false
+    ),
+    INSPECTOR_IMAGE(
+        title = "选择要解析的实况照片或动图",
+        subtitle = "挑选本机实况照片或 GIF 动图进行拆解、转 GIF 或修复",
+        isVideo = false,
+        isBatch = false
+    )
+}
+
+/**
+ * 纯本地系统文件选择器 Contract (使用 ACTION_OPEN_DOCUMENT + EXTRA_LOCAL_ONLY = true)，
+ * 彻底绕过 Android 13/14+ PickVisualMedia 触发的 Google 相册云端选择器“部分照片无法加载”故障。
+ */
+private class LocalOpenSingleMediaContract : ActivityResultContract<String, Uri?>() {
+    override fun createIntent(context: Context, input: String): Intent {
+        return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = input
+            putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
+        return if (resultCode == Activity.RESULT_OK) intent?.data else null
+    }
+}
+
+private class LocalOpenMultipleMediaContract : ActivityResultContract<String, List<Uri>>() {
+    override fun createIntent(context: Context, input: String): Intent {
+        return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = input
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): List<Uri> {
+        if (resultCode != Activity.RESULT_OK || intent == null) return emptyList()
+        val list = ArrayList<Uri>()
+        intent.clipData?.let { clip ->
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i)?.uri?.let { uri ->
+                    if (list.size < 12) list.add(uri)
+                }
+            }
+        }
+        if (list.isEmpty()) {
+            intent.data?.let { list.add(it) }
+        }
+        return list
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -177,84 +270,92 @@ fun MainScreen(
     val systemDark = isSystemInDarkTheme()
     val isDark = themeSettings.darkModeOverride ?: systemDark
 
+    val liquidBackdropState = rememberLiquidGlassBackdropState()
+
     var showPaletteSheet by remember { mutableStateOf(false) }
     var showLiquidGlassSheet by remember { mutableStateOf(false) }
+    var activePickerPurpose by remember { mutableStateOf<LocalMediaPickerPurpose?>(null) }
+    var pendingPurposeAfterPerm by remember { mutableStateOf<LocalMediaPickerPurpose?>(null) }
+    var permissionRefreshTrigger by remember { mutableStateOf(0) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> }
-
-    val pickVideoVisualMedia = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            viewModel.selectVideo(uri)
+    ) { _ ->
+        permissionRefreshTrigger++
+        val pending = pendingPurposeAfterPerm
+        if (pending != null) {
+            activePickerPurpose = pending
+            pendingPurposeAfterPerm = null
         }
     }
 
-    val pickVideoFallback = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
+    val systemSingleDocLauncher = rememberLauncherForActivityResult(
+        LocalOpenSingleMediaContract()
     ) { uri: Uri? ->
         if (uri != null) {
-            viewModel.selectVideo(uri)
+            val purpose = activePickerPurpose
+            activePickerPurpose = null
+            when (purpose) {
+                LocalMediaPickerPurpose.CUSTOM_COVER_IMAGE -> viewModel.setCustomCoverImage(uri)
+                LocalMediaPickerPurpose.REFERENCE_EXIF_IMAGE -> viewModel.setReferenceExifImage(uri)
+                LocalMediaPickerPurpose.INSPECTOR_IMAGE -> viewModel.inspectMotionPhotoUri(uri)
+                else -> viewModel.selectVideo(uri)
+            }
         }
     }
 
-    val pickMultipleVideos = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(12)
+    val systemBatchVideoDocLauncher = rememberLauncherForActivityResult(
+        LocalOpenMultipleMediaContract()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
+            activePickerPurpose = null
             viewModel.startBatchConversion(uris)
         }
     }
 
-    val pickCustomCoverPhoto = rememberLauncherForActivityResult(
+    val getContentFallbackLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            viewModel.setCustomCoverImage(uri)
-        }
-    }
-
-    val pickReferenceExifPhoto = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            viewModel.setReferenceExifImage(uri)
-        }
-    }
-
-    val pickImageForInspector = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            viewModel.inspectMotionPhotoUri(uri)
-        }
-    }
-
-    val launchVideoPicker = remember(pickVideoVisualMedia, pickVideoFallback) {
-        {
-            try {
-                pickVideoVisualMedia.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                )
-            } catch (_: Exception) {
-                pickVideoFallback.launch("video/*")
+            val purpose = activePickerPurpose
+            activePickerPurpose = null
+            when (purpose) {
+                LocalMediaPickerPurpose.CUSTOM_COVER_IMAGE -> viewModel.setCustomCoverImage(uri)
+                LocalMediaPickerPurpose.REFERENCE_EXIF_IMAGE -> viewModel.setReferenceExifImage(uri)
+                LocalMediaPickerPurpose.INSPECTOR_IMAGE -> viewModel.inspectMotionPhotoUri(uri)
+                else -> viewModel.selectVideo(uri)
             }
         }
     }
 
-    val launchBatchVideoPicker = remember(pickMultipleVideos, pickVideoFallback) {
-        {
-            try {
-                pickMultipleVideos.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+    fun hasMediaPermission(isVideo: Boolean): Boolean {
+        val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (isVideo) Manifest.permission.READ_MEDIA_VIDEO else Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        return ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun openLocalPicker(purpose: LocalMediaPickerPurpose) {
+        if (hasMediaPermission(purpose.isVideo)) {
+            activePickerPurpose = purpose
+        } else {
+            pendingPurposeAfterPerm = purpose
+            val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                arrayOf(
+                    Manifest.permission.READ_MEDIA_VIDEO,
+                    Manifest.permission.READ_MEDIA_IMAGES
                 )
-            } catch (_: Exception) {
-                pickVideoFallback.launch("video/*")
+            } else {
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
+            permissionLauncher.launch(permissions)
         }
     }
+
+    val launchVideoPicker = { openLocalPicker(LocalMediaPickerPurpose.SINGLE_VIDEO) }
+    val launchBatchVideoPicker = { openLocalPicker(LocalMediaPickerPurpose.BATCH_VIDEOS) }
 
     LaunchedEffect(Unit) {
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -277,106 +378,119 @@ fun MainScreen(
                 onToggleDark = { viewModel.cycleDarkMode(isDark) }
             )
         },
-        bottomBar = {
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
+        // 沉浸式全屏容器：页面内容延伸至底部 Dock 栏下方，供液态玻璃实时捕获并折射背景
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = innerPadding.calculateTopPadding())
+        ) {
             Box(
                 modifier = Modifier
+                    .fillMaxSize()
+                    .liquidGlassBackdropSource(
+                        state = liquidBackdropState,
+                        enabled = themeSettings.liquidGlass.enabled
+                    )
+            ) {
+                AnimatedContent(
+                    targetState = currentTab,
+                    contentKey = { it.name },
+                    transitionSpec = {
+                        val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                        (slideInHorizontally(animationSpec = ExpressiveMotion.defaultSpatial()) { fullWidth ->
+                            direction * (fullWidth / 5)
+                        } + scaleIn(
+                            initialScale = 0.93f,
+                            animationSpec = ExpressiveMotion.defaultSpatial()
+                        ) + fadeIn(
+                            animationSpec = ExpressiveMotion.defaultEffects()
+                        )) togetherWith (slideOutHorizontally(animationSpec = ExpressiveMotion.defaultSpatial()) { fullWidth ->
+                            -direction * (fullWidth / 6)
+                        } + scaleOut(
+                            targetScale = 0.94f,
+                            animationSpec = ExpressiveMotion.defaultSpatial()
+                        ) + fadeOut(
+                            animationSpec = ExpressiveMotion.fastEffects()
+                        ))
+                    },
+                    label = "tab_content_transition"
+                ) { tab ->
+                    when (tab) {
+                        AppTab.STUDIO -> {
+                            val studioState by viewModel.studioState.collectAsState()
+                            StudioTabContent(
+                                state = studioState,
+                                onPickVideo = launchVideoPicker,
+                                onPickBatchVideos = launchBatchVideoPicker,
+                                onPickCustomCover = { openLocalPicker(LocalMediaPickerPurpose.CUSTOM_COVER_IMAGE) },
+                                onClearCustomCover = { viewModel.setCustomCoverImage(null) },
+                                onPickReferenceExif = { openLocalPicker(LocalMediaPickerPurpose.REFERENCE_EXIF_IMAGE) },
+                                onClearReferenceExif = { viewModel.setReferenceExifImage(null) },
+                                onUpdateCoverTime = viewModel::updateCoverFrameTime,
+                                onUpdateTrimRange = viewModel::updateTrimRange,
+                                onUpdateAudio = viewModel::updateIncludeAudio,
+                                onUpdateQuality = viewModel::updateJpegQuality,
+                                onUpdateFormat = viewModel::updateOutputFormat,
+                                onUpdateLongExposure = viewModel::updateLongExposureMode,
+                                onUpdateFilter = viewModel::updateCoverFilter,
+                                onUpdateWatermark = viewModel::updateWatermarkEnabled,
+                                onStartConvert = viewModel::startConversion,
+                                onExportWeChatGif = viewModel::exportSuccessResultAsWeChatGif,
+                                onReset = viewModel::resetStudio,
+                                onInspectFile = viewModel::inspectMotionPhotoFile,
+                                onShareFile = { file -> shareMediaFile(context, file) }
+                            )
+                        }
+
+                        AppTab.INSPECTOR -> {
+                            val inspectorState by viewModel.inspectorState.collectAsState()
+                            InspectorTabContent(
+                                state = inspectorState,
+                                onPickImage = { openLocalPicker(LocalMediaPickerPurpose.INSPECTOR_IMAGE) },
+                                onExportVideo = viewModel::exportInspectedVideo,
+                                onExportStill = viewModel::exportInspectedStill,
+                                onExportWeChatGif = viewModel::exportInspectedWeChatGif,
+                                onRepairMotionPhoto = viewModel::repairInspectedMotionPhoto
+                            )
+                        }
+
+                        AppTab.GALLERY -> {
+                            val historyItems by viewModel.historyFiles.collectAsState()
+                            GalleryTabContent(
+                                historyItems = historyItems,
+                                onInspectFile = viewModel::inspectMotionPhotoFile,
+                                onShareFile = { file -> shareMediaFile(context, file) },
+                                onDeleteFile = viewModel::deleteHistoryFile,
+                                onPickVideo = launchVideoPicker
+                            )
+                        }
+
+                        AppTab.ABOUT -> {
+                            AboutAuthorTabContent(
+                                onShowToast = viewModel::showBannerMessage
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 悬浮于页面底部的液态玻璃 Dock 栏
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .navigationBarsPadding()
             ) {
                 ExpressiveFloatingToolbar(
                     currentTab = currentTab,
                     onSelectTab = viewModel::selectTab,
+                    backdropState = liquidBackdropState,
                     liquidGlassConfig = themeSettings.liquidGlass,
                     isDark = isDark,
                     onOpenLiquidGlassTuner = { showLiquidGlassSheet = true }
                 )
-            }
-        },
-        containerColor = MaterialTheme.colorScheme.background
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = innerPadding.calculateTopPadding())
-        ) {
-            // Google M3 Expressive 空间滑入+弹性缩放切换动效
-            AnimatedContent(
-                targetState = currentTab,
-                contentKey = { it.name },
-                transitionSpec = {
-                    val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
-                    (slideInHorizontally(animationSpec = ExpressiveMotion.defaultSpatial()) { fullWidth ->
-                        direction * (fullWidth / 5)
-                    } + scaleIn(
-                        initialScale = 0.93f,
-                        animationSpec = ExpressiveMotion.defaultSpatial()
-                    ) + fadeIn(
-                        animationSpec = ExpressiveMotion.defaultEffects()
-                    )) togetherWith (slideOutHorizontally(animationSpec = ExpressiveMotion.defaultSpatial()) { fullWidth ->
-                        -direction * (fullWidth / 6)
-                    } + scaleOut(
-                        targetScale = 0.94f,
-                        animationSpec = ExpressiveMotion.defaultSpatial()
-                    ) + fadeOut(
-                        animationSpec = ExpressiveMotion.fastEffects()
-                    ))
-                },
-                label = "tab_content_transition"
-            ) { tab ->
-                when (tab) {
-                    AppTab.STUDIO -> {
-                        val studioState by viewModel.studioState.collectAsState()
-                        StudioTabContent(
-                            state = studioState,
-                            onPickVideo = launchVideoPicker,
-                            onPickBatchVideos = launchBatchVideoPicker,
-                            onPickCustomCover = { pickCustomCoverPhoto.launch("image/*") },
-                            onClearCustomCover = { viewModel.setCustomCoverImage(null) },
-                            onPickReferenceExif = { pickReferenceExifPhoto.launch("image/*") },
-                            onClearReferenceExif = { viewModel.setReferenceExifImage(null) },
-                            onUpdateCoverTime = viewModel::updateCoverFrameTime,
-                            onUpdateTrimRange = viewModel::updateTrimRange,
-                            onUpdateAudio = viewModel::updateIncludeAudio,
-                            onUpdateQuality = viewModel::updateJpegQuality,
-                            onUpdateFormat = viewModel::updateOutputFormat,
-                            onUpdateLongExposure = viewModel::updateLongExposureMode,
-                            onUpdateFilter = viewModel::updateCoverFilter,
-                            onUpdateWatermark = viewModel::updateWatermarkEnabled,
-                            onStartConvert = viewModel::startConversion,
-                            onReset = viewModel::resetStudio,
-                            onInspectFile = viewModel::inspectMotionPhotoFile,
-                            onShareFile = { file -> shareMotionPhoto(context, file) }
-                        )
-                    }
-
-                    AppTab.INSPECTOR -> {
-                        val inspectorState by viewModel.inspectorState.collectAsState()
-                        InspectorTabContent(
-                            state = inspectorState,
-                            onPickImage = { pickImageForInspector.launch("image/*") },
-                            onExportVideo = viewModel::exportInspectedVideo,
-                            onExportStill = viewModel::exportInspectedStill,
-                            onRepairMotionPhoto = viewModel::repairInspectedMotionPhoto
-                        )
-                    }
-
-                    AppTab.GALLERY -> {
-                        val historyItems by viewModel.historyFiles.collectAsState()
-                        GalleryTabContent(
-                            historyItems = historyItems,
-                            onInspectFile = viewModel::inspectMotionPhotoFile,
-                            onShareFile = { file -> shareMotionPhoto(context, file) },
-                            onDeleteFile = viewModel::deleteHistoryFile,
-                            onPickVideo = launchVideoPicker
-                        )
-                    }
-
-                    AppTab.ABOUT -> {
-                        AboutAuthorTabContent(
-                            onShowToast = viewModel::showBannerMessage
-                        )
-                    }
-                }
             }
 
             AnimatedVisibility(
@@ -441,6 +555,56 @@ fun MainScreen(
             )
         }
     }
+
+    val currentPickerPurpose = activePickerPurpose
+    if (currentPickerPurpose != null) {
+        ModalBottomSheet(
+            onDismissRequest = { activePickerPurpose = null },
+            shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
+        ) {
+            InAppLocalMediaPickerSheet(
+                purpose = currentPickerPurpose,
+                refreshKey = permissionRefreshTrigger,
+                onLoadMedia = { isVid -> viewModel.queryLocalDeviceMedia(isVid) },
+                onSelectSingle = { uri ->
+                    activePickerPurpose = null
+                    when (currentPickerPurpose) {
+                        LocalMediaPickerPurpose.CUSTOM_COVER_IMAGE -> viewModel.setCustomCoverImage(uri)
+                        LocalMediaPickerPurpose.REFERENCE_EXIF_IMAGE -> viewModel.setReferenceExifImage(uri)
+                        LocalMediaPickerPurpose.INSPECTOR_IMAGE -> viewModel.inspectMotionPhotoUri(uri)
+                        else -> viewModel.selectVideo(uri)
+                    }
+                },
+                onSelectBatch = { uris ->
+                    activePickerPurpose = null
+                    viewModel.startBatchConversion(uris)
+                },
+                onOpenSystemDocumentPicker = {
+                    val mime = if (currentPickerPurpose.isVideo) "video/*" else "image/*"
+                    try {
+                        if (currentPickerPurpose.isBatch) {
+                            systemBatchVideoDocLauncher.launch(mime)
+                        } else {
+                            systemSingleDocLauncher.launch(mime)
+                        }
+                    } catch (_: Exception) {
+                        getContentFallbackLauncher.launch(mime)
+                    }
+                },
+                onRequestPermission = {
+                    val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        arrayOf(
+                            Manifest.permission.READ_MEDIA_VIDEO,
+                            Manifest.permission.READ_MEDIA_IMAGES
+                        )
+                    } else {
+                        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    }
+                    permissionLauncher.launch(permissions)
+                }
+            )
+        }
+    }
 }
 
 @Composable
@@ -496,7 +660,7 @@ private fun ExpressiveTopBar(
                 ) { tab ->
                     Text(
                         text = when (tab) {
-                            AppTab.STUDIO -> "视频转动态照片"
+                            AppTab.STUDIO -> "视频转实况照片 · 微信动图"
                             AppTab.INSPECTOR -> "查看信息与提取视频"
                             AppTab.GALLERY -> "历史记录"
                             AppTab.ABOUT -> "关于作者与使用指南"
@@ -567,6 +731,7 @@ private fun StudioTabContent(
     onUpdateFilter: (MotionPhotoBuilder.CoverFilter) -> Unit,
     onUpdateWatermark: (Boolean) -> Unit,
     onStartConvert: () -> Unit,
+    onExportWeChatGif: () -> Unit,
     onReset: () -> Unit,
     onInspectFile: (File) -> Unit,
     onShareFile: (File) -> Unit
@@ -631,8 +796,10 @@ private fun StudioTabContent(
                 StudioSuccessView(
                     result = current.result,
                     batchCount = current.batchCount,
+                    isExportingGif = current.isExportingGif,
                     onShare = { onShareFile(current.result.localFile) },
                     onInspect = { onInspectFile(current.result.localFile) },
+                    onExportWeChatGif = onExportWeChatGif,
                     onConvertAnother = {
                         onReset()
                         onPickVideo()
@@ -705,7 +872,7 @@ private fun StudioIdleHeroView(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "选择一段视频，自动生成可在手机相册中长按播放的动态照片。",
+                    text = "全品牌相册实况兼容（小米/OPPO/vivo/华为/三星/Google），支持微信朋友圈实况与微信聊天 GIF 动图。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -779,7 +946,7 @@ private fun StudioIdleHeroView(
             }
         }
 
-        Spacer(modifier = Modifier.height(96.dp))
+        Spacer(modifier = Modifier.height(104.dp))
     }
 }
 
@@ -1002,6 +1169,67 @@ private fun StudioEditorView(
             }
         }
 
+        // 输出格式与社交动图快捷选择栏（提升至主视野，方便直接选择全品牌实况或微信 GIF 动图）
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .expressiveBounceClick(pressedScale = 0.96f) { showFormatSheet = true },
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.68f)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "输出格式：${state.selectedFormat.displayName}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primary
+                        ) {
+                            Text(
+                                text = state.selectedFormat.badge,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = state.selectedFormat.subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Text(
+                        text = "切换格式",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
+
         // 封面帧位置滑块
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -1116,7 +1344,11 @@ private fun StudioEditorView(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Text(
-                        text = "生成动态照片",
+                        text = if (state.selectedFormat == MotionPhotoBuilder.OutputFormat.WECHAT_GIF) {
+                            "生成微信 GIF 动图"
+                        } else {
+                            "生成动态照片"
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimary
@@ -1125,7 +1357,7 @@ private fun StudioEditorView(
             }
         }
 
-        // 更多设置折叠栏（默认收起）
+        // 更多设置折叠栏
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1159,7 +1391,7 @@ private fun StudioEditorView(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "截取片段、替换封面、滤镜、相册兼容模式",
+                            text = "截取片段、替换封面、相机参数克隆、长曝光与滤镜",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1348,7 +1580,7 @@ private fun StudioEditorView(
                                 )
                                 Text(
                                     text = state.referenceExifName?.let { "已选：$it" }
-                                        ?: "从本机拍的照片复制机型信息，提高相册识别率",
+                                        ?: "从本机拍的照片复制机型信息，提高相册与微信识别率",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1416,52 +1648,10 @@ private fun StudioEditorView(
                         }
                     }
                 }
-
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .expressiveBounceClick { showFormatSheet = true },
-                    shape = RoundedCornerShape(26.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "兼容模式：${state.selectedFormat.displayName}",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = state.selectedFormat.subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface
-                        ) {
-                            Text(
-                                text = "更改",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-                }
             }
         }
 
-        Spacer(modifier = Modifier.height(96.dp))
+        Spacer(modifier = Modifier.height(104.dp))
     }
 
     if (showFormatSheet) {
@@ -1477,10 +1667,16 @@ private fun StudioEditorView(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "选择兼容模式",
+                    text = "选择兼容模式与微信动图格式",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.ExtraBold
                 )
+                Text(
+                    text = "支持各大手机品牌原生相册实况、微信朋友圈/小红书实况直发、以及微信聊天 GIF 表情包动图",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(2.dp))
                 MotionPhotoBuilder.OutputFormat.Entries.forEach { fmt ->
                     val selected = fmt == state.selectedFormat
                     Surface(
@@ -1504,18 +1700,50 @@ private fun StudioEditorView(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = fmt.displayName,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = fmt.displayName,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.secondaryContainer
+                                        }
+                                    ) {
+                                        Text(
+                                            text = fmt.badge,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (selected) {
+                                                MaterialTheme.colorScheme.onPrimary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
+                                            },
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(3.dp))
                                 Text(
                                     text = fmt.subtitle,
                                     style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = fmt.description,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                                 )
                             }
                             if (selected) {
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Icon(
                                     imageVector = Icons.Rounded.CheckCircle,
                                     contentDescription = null,
@@ -1525,7 +1753,7 @@ private fun StudioEditorView(
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -1609,8 +1837,10 @@ private fun StudioConvertingView(
 private fun StudioSuccessView(
     result: MotionPhotoBuilder.ConversionResult,
     batchCount: Int,
+    isExportingGif: Boolean,
     onShare: () -> Unit,
     onInspect: () -> Unit,
+    onExportWeChatGif: () -> Unit,
     onConvertAnother: () -> Unit
 ) {
     val scrollState = rememberScrollState()
@@ -1649,10 +1879,11 @@ private fun StudioSuccessView(
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (batchCount > 1) {
-                            "已保存 $batchCount 张动态照片到相册"
-                        } else {
-                            "已保存到相册"
+                        text = when {
+                            result.galleryUri == null -> "文件已生成，相册保存失败"
+                            result.isGif -> "已保存微信 GIF 动图到相册"
+                            batchCount > 1 -> "批量合成完成（$batchCount 张）"
+                            else -> "已保存到相册 (${result.format.displayName})"
                         },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
@@ -1667,28 +1898,38 @@ private fun StudioSuccessView(
             }
         }
 
-        LiveMotionPhotoPlayerCard(
-            coverImageModel = result.localFile,
-            videoFileOrUri = result.localFile,
-            resolutionLabel = result.resolution,
-            durationMs = result.videoDurationMs,
-            autoPlayInitially = false
-        )
+        if (!result.isGif) {
+            LiveMotionPhotoPlayerCard(
+                coverImageModel = result.localFile,
+                videoFileOrUri = result.localFile,
+                resolutionLabel = result.resolution,
+                durationMs = result.videoDurationMs,
+                autoPlayInitially = false
+            )
+        } else {
+            AnimatedGifPreviewCard(
+                gifFile = result.localFile,
+                resolutionLabel = result.resolution,
+                fileSizeBytes = result.totalSizeBytes
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            FilledTonalButton(
-                onClick = onInspect,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(54.dp),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Icon(imageVector = Icons.Rounded.Verified, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("查看详情", fontWeight = FontWeight.Bold)
+            if (!result.isGif) {
+                FilledTonalButton(
+                    onClick = onInspect,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Icon(imageVector = Icons.Rounded.Verified, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("查看详情", fontWeight = FontWeight.Bold)
+                }
             }
 
             Button(
@@ -1700,7 +1941,25 @@ private fun StudioSuccessView(
             ) {
                 Icon(imageVector = Icons.Rounded.Share, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("分享", fontWeight = FontWeight.Bold)
+                Text(if (result.isGif) "发送微信动图" else "分享", fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (!result.isGif) {
+            FilledTonalButton(
+                onClick = onExportWeChatGif,
+                enabled = !isExportingGif,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Icon(imageVector = Icons.Rounded.GifBox, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isExportingGif) "正在生成微信 GIF 动图..." else "同时导出微信聊天 GIF 动图",
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
 
@@ -1716,7 +1975,7 @@ private fun StudioSuccessView(
             Text("继续制作", fontWeight = FontWeight.Bold)
         }
 
-        Spacer(modifier = Modifier.height(96.dp))
+        Spacer(modifier = Modifier.height(104.dp))
     }
 }
 
@@ -1809,6 +2068,7 @@ private fun InspectorTabContent(
     onPickImage: () -> Unit,
     onExportVideo: () -> Unit,
     onExportStill: () -> Unit,
+    onExportWeChatGif: () -> Unit,
     onRepairMotionPhoto: () -> Unit
 ) {
     val scrollState = rememberScrollState()
@@ -1837,7 +2097,7 @@ private fun InspectorTabContent(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "选择一张动态照片，可单独保存其中的视频、静态图片，或修复相册无法识别的动态照片。",
+                    text = "选择一张动态照片，可无损提取视频、导出静态主图、一键转微信 GIF 动图，或修复无法识别的实况照片。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -1938,19 +2198,36 @@ private fun InspectorTabContent(
                                     MaterialTheme.colorScheme.error
                                 }
                             )
-                            Text(
-                                text = if (report.isValidMotionPhoto) {
-                                    "包含完整动态视频"
-                                } else if (report.canBeRepaired) {
-                                    "包含视频，但信息不完整（可修复）"
-                                } else {
-                                    "普通静态照片"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Column {
+                                Text(
+                                    text = if (report.isValidMotionPhoto) {
+                                        "包含完整动态视频"
+                                    } else if (report.canBeRepaired) {
+                                        "包含视频，但信息不完整（可修复）"
+                                    } else {
+                                        "普通静态照片"
+                                    },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (report.detectedStandards.isNotEmpty()) {
+                                    Text(
+                                        text = "已识别协议：${report.detectedStandards.joinToString(" · ")}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
                         }
                     }
+                }
+
+                if (report.primaryMime == "image/gif" && state.sourceUriOrFile is File) {
+                    AnimatedGifPreviewCard(
+                        gifFile = state.sourceUriOrFile,
+                        resolutionLabel = report.MakeModelSummary,
+                        fileSizeBytes = report.totalFileSize
+                    )
                 }
 
                 if (report.extractedVideoFile != null) {
@@ -1994,6 +2271,22 @@ private fun InspectorTabContent(
                                 ) {
                                     Text("保存图片", fontWeight = FontWeight.Bold)
                                 }
+                            }
+
+                            FilledTonalButton(
+                                onClick = onExportWeChatGif,
+                                enabled = !state.isExportingGif,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                shape = RoundedCornerShape(24.dp)
+                            ) {
+                                Icon(imageVector = Icons.Rounded.GifBox, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (state.isExportingGif) "正在编码微信 GIF..." else "导出微信 GIF 动图",
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
 
                             Button(
@@ -2073,13 +2366,10 @@ private fun InspectorTabContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(96.dp))
+        Spacer(modifier = Modifier.height(104.dp))
     }
 }
 
-/**
- * 作品历史记录页（采用高性能 LazyColumn + 预计算元数据 + 缩略图精确采样）
- */
 @Composable
 private fun GalleryTabContent(
     historyItems: List<MainViewModel.HistoryPhotoItem>,
@@ -2194,7 +2484,7 @@ private fun GalleryTabContent(
                         Row {
                             IconButton(onClick = { onInspectFile(item.file) }) {
                                 Icon(
-                                    imageVector = Icons.Rounded.PlayArrow,
+                                    imageVector = if (item.isGif) Icons.Rounded.GifBox else Icons.Rounded.PlayArrow,
                                     contentDescription = "查看",
                                     tint = MaterialTheme.colorScheme.primary
                                 )
@@ -2220,14 +2510,14 @@ private fun GalleryTabContent(
         }
 
         item(key = "bottom_spacer", contentType = "spacer") {
-            Spacer(modifier = Modifier.height(96.dp))
+            Spacer(modifier = Modifier.height(104.dp))
         }
     }
 }
 
 /**
  * Tab 4：关于与使用说明页面
- * 完整保留原作者信息（黑白君 · 抖音号 heibaijunbenjun · 抖音二维码），并附带实用使用说明
+ * 完整保留原作者信息（黑白君 · 抖音号 heibaijunbenjun · 抖音二维码），并附带全品牌与微信实况/GIF动图使用说明
  */
 @Composable
 private fun AboutAuthorTabContent(
@@ -2389,7 +2679,7 @@ private fun AboutAuthorTabContent(
             }
         }
 
-        // 3. 使用说明：快速上手与高级功能指南
+        // 3. 使用说明：全品牌实况与微信动图指南
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(28.dp),
@@ -2420,26 +2710,26 @@ private fun AboutAuthorTabContent(
 
                 GuideStepItem(
                     stepNumber = "1",
-                    title = "导入单段或批量视频",
-                    description = "在「创作」页点击「选择视频」导入单段视频进行精细编辑，或点击「批量选择视频」一次勾选多段视频自动批量转换。"
+                    title = "全品牌原生相册实况兼容",
+                    description = "内置全品牌通用、小米澎湃OS (MicroVideo+MotionPhoto)、OPPO/一加 (O-Live v2)、vivo/iQOO (VCamera+UUID尾盒)、华为/荣耀 (HwCamera) 与三星 OneUI (SEFH/SEFT 尾部块) 专属协议，生成后保存在相册 DCIM/Camera 中长按即可播放。"
                 )
 
                 GuideStepItem(
                     stepNumber = "2",
-                    title = "定格封面与片段精修",
-                    description = "滑动「封面位置」选取最清晰的一帧作为静态主图；展开「更多设置」可自由截取起止片段、从相册替换高清封面图、开启慢门/光轨长曝光或叠加滤镜与机型水印。"
+                    title = "微信朋友圈实况 & 微信聊天 GIF 动图",
+                    description = "• 发朋友圈/小红书实况：选择「微信 / 小红书实况」模式，自动截取 ≤3 秒黄金实况片段并匹配本机相机参数，发朋友圈时左下角直接点亮实况图标。\n• 发微信聊天/表情包：选择「微信 GIF 动图」或在合成成功页点击「同时导出微信聊天 GIF 动图」，即可生成循环播放的高帧率 GIF 动图。"
                 )
 
                 GuideStepItem(
                     stepNumber = "3",
-                    title = "各品牌相册兼容与 EXIF 克隆",
-                    description = "默认「通用格式」同时写入 Google、小米 MicroVideo 与 OPPO O-Live 元数据。若部分系统相册校验本机相机参数，可在「更多设置 → 导入相机参数」中任选一张本机相机拍的照片自动克隆机型信息。"
+                    title = "导入本机相机样张参数 (EXIF 克隆)",
+                    description = "若部分手机系统相册对第三方合成的实况照片校验严苛，可在「更多设置 → 导入相机参数」中任选一张本机原生相机拍的照片，自动克隆 25+ 项机型与镜头参数。"
                 )
 
                 GuideStepItem(
                     stepNumber = "4",
-                    title = "无损提取视频与损坏修复",
-                    description = "在「检验」页导入任意实况照片，可一键无损提取内嵌 MP4 视频、单独导出高清静态图片，或一键修复无法在相册长按播放的实况照片。"
+                    title = "无损拆解视频、转 GIF 与一键修复",
+                    description = "在「检验」页导入任意动态照片，支持一键无损提取内嵌 MP4 视频、提取高清静态 JPG、导出微信 GIF 动图，或修复无法动态播放的实况照片。"
                 )
             }
         }
@@ -2456,11 +2746,11 @@ private fun AboutAuthorTabContent(
             ) {
                 MetricRow("作者", "黑白君")
                 MetricRow("抖音号", "heibaijunbenjun")
-                MetricRow("版本", "1.3.0")
+                MetricRow("版本", "1.4.0")
             }
         }
 
-        Spacer(modifier = Modifier.height(96.dp))
+        Spacer(modifier = Modifier.height(104.dp))
     }
 
     if (showZoomQrDialog) {
@@ -2682,7 +2972,7 @@ private fun ThemeCustomizationSheet(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "自由调节模糊度、折射曲率、色散与透光率",
+                        text = "自由调节模糊度、SDF 折射曲率、光谱色散与透光率",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2725,7 +3015,7 @@ private fun LiquidGlassTunerSheet(
                     fontWeight = FontWeight.ExtraBold
                 )
                 Text(
-                    text = "基于开源 Kyant0/AndroidLiquidGlass 光学折射与色散着色器（仅作用于 Dock 底板）",
+                    text = "基于 Kyant0/AndroidLiquidGlass 实时背景捕获 + SDF 四分之一圆弧透镜折射与五通道光谱色散",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -2738,7 +3028,6 @@ private fun LiquidGlassTunerSheet(
             )
         }
 
-        // 预设风格选择
         Text(
             text = "光学预设",
             style = MaterialTheme.typography.labelLarge,
@@ -2787,7 +3076,6 @@ private fun LiquidGlassTunerSheet(
             }
         }
 
-        // 1. 模糊半径
         LiquidGlassSliderItem(
             title = "背景模糊半径",
             valueText = "${config.blurRadiusDp.roundToInt()} dp",
@@ -2799,7 +3087,6 @@ private fun LiquidGlassTunerSheet(
             }
         )
 
-        // 2. 透镜折射曲率
         LiquidGlassSliderItem(
             title = "透镜折射曲率",
             valueText = "${(config.refractionStrength * 100).roundToInt()}%",
@@ -2811,7 +3098,6 @@ private fun LiquidGlassTunerSheet(
             }
         )
 
-        // 3. 边缘棱镜色散
         LiquidGlassSliderItem(
             title = "边缘棱镜色散",
             valueText = "${(config.dispersionStrength * 100).roundToInt()}%",
@@ -2823,7 +3109,6 @@ private fun LiquidGlassTunerSheet(
             }
         )
 
-        // 4. 玻璃漫射浓度
         LiquidGlassSliderItem(
             title = "玻璃透光浓度",
             valueText = "${(config.tintAlpha * 100).roundToInt()}%",
@@ -2835,7 +3120,6 @@ private fun LiquidGlassTunerSheet(
             }
         )
 
-        // 5. 菲涅尔边缘高光
         LiquidGlassSliderItem(
             title = "菲涅尔边缘高光",
             valueText = "${(config.specularStrength * 100).roundToInt()}%",
@@ -2847,12 +3131,11 @@ private fun LiquidGlassTunerSheet(
             }
         )
 
-        // 6. 胶囊圆角弧度
         LiquidGlassSliderItem(
             title = "胶囊圆角弧度",
             valueText = "${config.cornerRadiusDp.roundToInt()} dp",
             value = config.cornerRadiusDp,
-            valueRange = 16f..32f,
+            valueRange = 16f..33f,
             enabled = config.enabled,
             onValueChange = { v ->
                 onUpdateConfig { it.copy(cornerRadiusDp = v, preset = null) }
@@ -2925,19 +3208,384 @@ private fun formatBytes(bytes: Long): String {
     return String.format(Locale.US, "%.2f MB", mb)
 }
 
-private fun shareMotionPhoto(context: Context, file: File) {
+private fun shareMediaFile(context: Context, file: File) {
     try {
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
             file
         )
+        val isGif = file.name.endsWith(".gif", ignoreCase = true)
+        val mime = if (isGif) "image/gif" else "image/jpeg"
+        val title = if (isGif) "发送微信表情包 / 社交 GIF 动图" else "分享实况动态照片"
         val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/jpeg"
+            type = mime
             putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newUri(context.contentResolver, file.name, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "分享动态照片"))
+        context.startActivity(Intent.createChooser(intent, title).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        })
     } catch (_: Exception) {
+    }
+}
+
+/**
+ * App 内置极速本地视频/相册选择器 (InAppLocalMediaPickerSheet)：
+ * - 直接查询手机本地 MediaStore 数据库，毫秒级加载本机相机视频、录屏、微信/抖音保存的视频与实况照片
+ * - 100% 绕过 Android 系统 PickVisualMedia 调用的 Google 相册云端选择器，彻底杜绝“部分照片无法加载”报错弹窗
+ * - 同时提供「系统文件管理」入口 (ACTION_OPEN_DOCUMENT + EXTRA_LOCAL_ONLY)，支持从任意本地文件夹选取
+ */
+@Composable
+private fun InAppLocalMediaPickerSheet(
+    purpose: LocalMediaPickerPurpose,
+    refreshKey: Int,
+    onLoadMedia: suspend (Boolean) -> List<MainViewModel.LocalMediaEntry>,
+    onSelectSingle: (Uri) -> Unit,
+    onSelectBatch: (List<Uri>) -> Unit,
+    onOpenSystemDocumentPicker: () -> Unit,
+    onRequestPermission: () -> Unit
+) {
+    val context = LocalContext.current
+    var isLoading by remember { mutableStateOf(true) }
+    var mediaItems by remember { mutableStateOf<List<MainViewModel.LocalMediaEntry>>(emptyList()) }
+    var selectedBucket by remember { mutableStateOf("全部") }
+    var batchSelectedUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+
+    LaunchedEffect(purpose, refreshKey) {
+        isLoading = true
+        mediaItems = onLoadMedia(purpose.isVideo)
+        selectedBucket = "全部"
+        isLoading = false
+    }
+
+    val buckets = remember(mediaItems) {
+        val names = mediaItems.map { it.bucketName }.distinct()
+        listOf("全部") + names
+    }
+
+    val filteredItems = remember(mediaItems, selectedBucket) {
+        if (selectedBucket == "全部") {
+            mediaItems
+        } else {
+            mediaItems.filter { it.bucketName == selectedBucket }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .fillMaxHeight(0.84f)
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = purpose.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = purpose.subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            FilledTonalButton(
+                onClick = onOpenSystemDocumentPicker,
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.FolderOpen,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("系统文件", fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (buckets.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                buckets.forEach { bucket ->
+                    val isSel = bucket == selectedBucket
+                    Surface(
+                        modifier = Modifier.expressiveBounceClick { selectedBucket = bucket },
+                        shape = CircleShape,
+                        color = if (isSel) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    ) {
+                        Text(
+                            text = bucket,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSel) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (purpose.isBatch && batchSelectedUris.isNotEmpty()) {
+            Button(
+                onClick = { onSelectBatch(batchSelectedUris) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Icon(imageVector = Icons.Rounded.Check, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "开始批量转换 (已选 ${batchSelectedUris.size} 个视频)",
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
+        }
+
+        when {
+            isLoading -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ExpressiveWavyLinearProgress(
+                        progress = 0.65f,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 32.dp)
+                    )
+                }
+            }
+
+            filteredItems.isEmpty() -> {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    shape = RoundedCornerShape(28.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.VideoLibrary,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = if (purpose.isVideo) "未扫描到本机视频或尚未授予媒体权限" else "未扫描到本机照片或尚未授予相册权限",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "您可点击下方按钮授权读取本机相册，或直接打开系统本地文件管理器挑选文件。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedButton(
+                                onClick = onRequestPermission,
+                                shape = RoundedCornerShape(22.dp)
+                            ) {
+                                Text("授予读取权限", fontWeight = FontWeight.Bold)
+                            }
+                            Button(
+                                onClick = onOpenSystemDocumentPicker,
+                                shape = RoundedCornerShape(22.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FolderOpen,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("打开系统文件管理", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+
+            else -> {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 28.dp)
+                ) {
+                    items(
+                        items = filteredItems,
+                        key = { "${it.isVideo}_${it.id}" }
+                    ) { entry ->
+                        val selectedIndex = if (purpose.isBatch) batchSelectedUris.indexOf(entry.uri) else -1
+                        val isSelected = selectedIndex >= 0
+
+                        val thumbReq = remember(context, entry.uri, entry.isVideo) {
+                            ImageRequest.Builder(context)
+                                .data(entry.uri)
+                                .apply {
+                                    if (entry.isVideo) {
+                                        decoderFactory(VideoFrameDecoder.Factory())
+                                    }
+                                }
+                                .size(220, 220)
+                                .precision(Precision.INEXACT)
+                                .allowHardware(false)
+                                .crossfade(false)
+                                .build()
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .expressiveBounceClick(pressedScale = 0.97f) {
+                                    if (purpose.isBatch) {
+                                        batchSelectedUris = if (isSelected) {
+                                            batchSelectedUris - entry.uri
+                                        } else if (batchSelectedUris.size < 12) {
+                                            batchSelectedUris + entry.uri
+                                        } else {
+                                            batchSelectedUris
+                                        }
+                                    } else {
+                                        onSelectSingle(entry.uri)
+                                    }
+                                },
+                            shape = RoundedCornerShape(22.dp),
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+                            }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(72.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(MaterialTheme.colorScheme.surface)
+                                ) {
+                                    AsyncImage(
+                                        model = thumbReq,
+                                        contentDescription = entry.displayName,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    if (entry.isVideo && entry.durationMs > 0L) {
+                                        val totalSec = (entry.durationMs / 1000L).coerceAtLeast(1L)
+                                        val minPart = totalSec / 60L
+                                        val secPart = totalSec % 60L
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(4.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(Color.Black.copy(alpha = 0.68f))
+                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = String.format(Locale.US, "%02d:%02d", minPart, secPart),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color.White,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = entry.displayName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    val dimLabel = if (entry.width > 0 && entry.height > 0) {
+                                        "${entry.width}×${entry.height} · "
+                                    } else ""
+                                    Text(
+                                        text = "${entry.bucketName} · $dimLabel${formatBytes(entry.sizeBytes)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                if (purpose.isBatch) {
+                                    Surface(
+                                        modifier = Modifier.size(30.dp),
+                                        shape = CircleShape,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.surface
+                                        }
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            if (isSelected) {
+                                                Text(
+                                                    text = "${selectedIndex + 1}",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = MaterialTheme.colorScheme.onPrimary
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Icon(
+                                        imageVector = if (entry.isVideo) Icons.Rounded.PlayArrow else Icons.Rounded.CheckCircle,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

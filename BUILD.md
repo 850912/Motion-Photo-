@@ -177,4 +177,4 @@ exiftool motion_photo_*.jpg | grep -i "motion\|micro\|container"
 
 ---
 
-**签名说明**：仓库不包含签名密钥。Release APK 默认未签名，请用自己的密钥签名；Debug APK 可用于测试。
+**注意**：由于 AndroidHarness 环境限制，无法直接构建 APK。请使用上述方法之一进行构建和测试。
