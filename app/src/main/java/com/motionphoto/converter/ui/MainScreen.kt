@@ -1,17 +1,10 @@
 package com.motionphoto.converter.ui
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,7 +12,6 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -36,6 +28,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -48,43 +41,40 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddPhotoAlternate
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.CameraEnhance
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.MotionPhotosOn
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.MusicOff
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PhotoAlbum
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QrCode2
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Verified
-import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.CameraEnhance
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.ContentCut
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.MotionPhotosOn
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.MusicOff
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PhotoAlbum
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -103,21 +93,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -125,7 +115,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
@@ -134,7 +123,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
-import com.motionphoto.converter.R
+import coil.request.ImageRequest
+import coil.size.Precision
 import com.motionphoto.converter.core.MotionPhotoBuilder
 import com.motionphoto.converter.ui.components.AppTab
 import com.motionphoto.converter.ui.components.ExpressiveConnectedButtonGroup
@@ -143,17 +133,14 @@ import com.motionphoto.converter.ui.components.ExpressiveMorphingBadge
 import com.motionphoto.converter.ui.components.ExpressiveWavyCircularHalo
 import com.motionphoto.converter.ui.components.ExpressiveWavyLinearProgress
 import com.motionphoto.converter.ui.components.LiveMotionPhotoPlayerCard
-import com.motionphoto.converter.ui.theme.ExpressiveMotion
 import com.motionphoto.converter.ui.theme.ExpressivePalette
 import com.motionphoto.converter.ui.theme.expressiveBounceClick
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+
+private val PreviewModes = listOf("VIDEO", "COVER")
+private val QualityOptions = listOf(88, 95, 100)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,15 +149,13 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val currentTab by viewModel.currentTab.collectAsState()
-    val studioState by viewModel.studioState.collectAsState()
-    val inspectorState by viewModel.inspectorState.collectAsState()
-    val historyFiles by viewModel.historyFiles.collectAsState()
     val themeSettings by viewModel.themeSettings.collectAsState()
     val statusBanner by viewModel.statusBannerMessage.collectAsState()
     val systemDark = isSystemInDarkTheme()
     val isDark = themeSettings.darkModeOverride ?: systemDark
 
     var showPaletteSheet by remember { mutableStateOf(false) }
+    var showLiquidGlassSheet by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -224,23 +209,27 @@ fun MainScreen(
         }
     }
 
-    val launchVideoPicker = {
-        try {
-            pickVideoVisualMedia.launch(
-                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-            )
-        } catch (_: Exception) {
-            pickVideoFallback.launch("video/*")
+    val launchVideoPicker = remember(pickVideoVisualMedia, pickVideoFallback) {
+        {
+            try {
+                pickVideoVisualMedia.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                )
+            } catch (_: Exception) {
+                pickVideoFallback.launch("video/*")
+            }
         }
     }
 
-    val launchBatchVideoPicker = {
-        try {
-            pickMultipleVideos.launch(
-                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-            )
-        } catch (_: Exception) {
-            pickVideoFallback.launch("video/*")
+    val launchBatchVideoPicker = remember(pickMultipleVideos, pickVideoFallback) {
+        {
+            try {
+                pickMultipleVideos.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                )
+            } catch (_: Exception) {
+                pickVideoFallback.launch("video/*")
+            }
         }
     }
 
@@ -273,8 +262,11 @@ fun MainScreen(
             ) {
                 ExpressiveFloatingToolbar(
                     currentTab = currentTab,
-                    onSelectTab = { viewModel.selectTab(it) },
-                    onQuickPickVideo = launchVideoPicker
+                    onSelectTab = viewModel::selectTab,
+                    onQuickPickVideo = launchVideoPicker,
+                    liquidGlassConfig = themeSettings.liquidGlass,
+                    isDark = isDark,
+                    onOpenLiquidGlassTuner = { showLiquidGlassSheet = true }
                 )
             }
         },
@@ -283,19 +275,20 @@ fun MainScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(top = innerPadding.calculateTopPadding())
         ) {
             AnimatedContent(
                 targetState = currentTab,
                 contentKey = { it.name },
                 transitionSpec = {
-                    fadeIn(animationSpec = tween(160)) togetherWith
-                        fadeOut(animationSpec = tween(130))
+                    fadeIn(animationSpec = tween(140)) togetherWith
+                        fadeOut(animationSpec = tween(110))
                 },
                 label = "tab_content_transition"
             ) { tab ->
                 when (tab) {
                     AppTab.STUDIO -> {
+                        val studioState by viewModel.studioState.collectAsState()
                         StudioTabContent(
                             state = studioState,
                             onPickVideo = launchVideoPicker,
@@ -314,16 +307,13 @@ fun MainScreen(
                             onUpdateWatermark = viewModel::updateWatermarkEnabled,
                             onStartConvert = viewModel::startConversion,
                             onReset = viewModel::resetStudio,
-                            onInspectFile = { file ->
-                                viewModel.inspectMotionPhotoFile(file)
-                            },
-                            onShareFile = { file ->
-                                shareMotionPhoto(context, file)
-                            }
+                            onInspectFile = viewModel::inspectMotionPhotoFile,
+                            onShareFile = { file -> shareMotionPhoto(context, file) }
                         )
                     }
 
                     AppTab.INSPECTOR -> {
+                        val inspectorState by viewModel.inspectorState.collectAsState()
                         InspectorTabContent(
                             state = inspectorState,
                             onPickImage = { pickImageForInspector.launch("image/*") },
@@ -334,18 +324,13 @@ fun MainScreen(
                     }
 
                     AppTab.GALLERY -> {
-                        GalleryAndGuideTabContent(
-                            historyFiles = historyFiles,
-                            onInspectFile = { file -> viewModel.inspectMotionPhotoFile(file) },
+                        val historyItems by viewModel.historyFiles.collectAsState()
+                        GalleryTabContent(
+                            historyItems = historyItems,
+                            onInspectFile = viewModel::inspectMotionPhotoFile,
                             onShareFile = { file -> shareMotionPhoto(context, file) },
-                            onDeleteFile = { file -> viewModel.deleteHistoryFile(file) },
+                            onDeleteFile = viewModel::deleteHistoryFile,
                             onPickVideo = launchVideoPicker
-                        )
-                    }
-
-                    AppTab.ABOUT -> {
-                        AboutAuthorTabContent(
-                            onShowToast = viewModel::showBannerMessage
                         )
                     }
                 }
@@ -353,8 +338,8 @@ fun MainScreen(
 
             AnimatedVisibility(
                 visible = statusBanner != null,
-                enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.92f, animationSpec = tween(150)),
-                exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.92f, animationSpec = tween(150)),
+                enter = fadeIn(tween(140)) + scaleIn(initialScale = 0.92f, animationSpec = tween(140)),
+                exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.92f, animationSpec = tween(140)),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(horizontal = 20.dp, vertical = 8.dp)
@@ -382,9 +367,30 @@ fun MainScreen(
         ) {
             ThemeCustomizationSheet(
                 settings = themeSettings,
-                onSelectPalette = { viewModel.updatePalette(it) },
-                onToggleDynamic = { viewModel.toggleDynamicColor(it) },
+                onSelectPalette = viewModel::updatePalette,
+                onToggleDynamic = viewModel::toggleDynamicColor,
+                onOpenLiquidGlass = {
+                    showPaletteSheet = false
+                    showLiquidGlassSheet = true
+                },
                 onDismiss = { showPaletteSheet = false }
+            )
+        }
+    }
+
+    if (showLiquidGlassSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showLiquidGlassSheet = false },
+            shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+            scrimColor = Color.Black.copy(alpha = 0.18f)
+        ) {
+            LiquidGlassTunerSheet(
+                config = themeSettings.liquidGlass,
+                onUpdateConfig = viewModel::updateLiquidGlassConfig,
+                onSelectPreset = viewModel::applyLiquidGlassPreset,
+                onResetDefault = {
+                    viewModel.applyLiquidGlassPreset(MainViewModel.LiquidGlassPreset.CRYSTAL_DROP)
+                }
             )
         }
     }
@@ -411,12 +417,12 @@ private fun ExpressiveTopBar(
         ) {
             Surface(
                 modifier = Modifier.size(42.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(22.dp),
                 color = MaterialTheme.colorScheme.primaryContainer
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = Icons.Default.MotionPhotosOn,
+                        imageVector = Icons.Rounded.MotionPhotosOn,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(24.dp)
@@ -436,7 +442,6 @@ private fun ExpressiveTopBar(
                         AppTab.STUDIO -> "视频转动态照片"
                         AppTab.INSPECTOR -> "查看信息与提取视频"
                         AppTab.GALLERY -> "历史记录"
-                        AppTab.ABOUT -> "关于"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -457,7 +462,7 @@ private fun ExpressiveTopBar(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = Icons.Default.Palette,
+                        imageVector = Icons.Rounded.Palette,
                         contentDescription = "主题配色",
                         tint = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier.size(19.dp)
@@ -474,7 +479,7 @@ private fun ExpressiveTopBar(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = if (isDark) Icons.Default.LightMode else Icons.Default.DarkMode,
+                        imageVector = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
                         contentDescription = "深浅色模式",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(19.dp)
@@ -511,8 +516,8 @@ private fun StudioTabContent(
         targetState = state,
         contentKey = { it::class.simpleName },
         transitionSpec = {
-            fadeIn(animationSpec = tween(180)) togetherWith
-                fadeOut(animationSpec = tween(140))
+            fadeIn(animationSpec = tween(150)) togetherWith
+                fadeOut(animationSpec = tween(120))
         },
         label = "studio_state_transition"
     ) { current ->
@@ -548,8 +553,7 @@ private fun StudioTabContent(
                 StudioConvertingView(
                     progress = current.progress,
                     stage = current.stage,
-                    detailMessage = current.detailMessage,
-                    format = current.format
+                    detailMessage = current.detailMessage
                 )
             }
 
@@ -611,7 +615,7 @@ private fun StudioIdleHeroView(
                     isAnimating = false
                 ) {
                     Icon(
-                        imageVector = Icons.Default.MotionPhotosOn,
+                        imageVector = Icons.Rounded.MotionPhotosOn,
                         contentDescription = null,
                         modifier = Modifier.size(52.dp),
                         tint = MaterialTheme.colorScheme.onPrimaryContainer
@@ -655,7 +659,7 @@ private fun StudioIdleHeroView(
                         horizontalArrangement = Arrangement.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.VideoLibrary,
+                            imageVector = Icons.Rounded.VideoLibrary,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(22.dp)
@@ -679,7 +683,7 @@ private fun StudioIdleHeroView(
                         .expressiveBounceClick(pressedScale = 0.96f) {
                             onPickBatchVideos()
                         },
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(26.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer
                 ) {
                     Row(
@@ -688,7 +692,7 @@ private fun StudioIdleHeroView(
                         horizontalArrangement = Arrangement.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Layers,
+                            imageVector = Icons.Rounded.Layers,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.size(18.dp)
@@ -774,13 +778,30 @@ private fun StudioEditorView(
         }
     }
 
-    val displayedCoverBitmap: Bitmap? = if (isDraggingCoverSlider && state.timelineThumbnails.isNotEmpty()) {
-        val ratio = (localCoverTimeUs / (state.metadata.durationMs * 1000f).coerceAtLeast(1f)).coerceIn(0f, 1f)
-        val idx = (ratio * (state.timelineThumbnails.size - 1)).roundToInt()
-            .coerceIn(0, state.timelineThumbnails.lastIndex)
-        state.timelineThumbnails[idx]
+    // 预缓存时间轴缩略图的 ImageBitmap，避免滑块拖动重组时每帧重复转换 Bitmap -> ImageBitmap
+    val timelineImageBitmaps: List<ImageBitmap> = remember(state.timelineThumbnails) {
+        state.timelineThumbnails.map { it.asImageBitmap() }
+    }
+    val coverPreviewImageBitmap: ImageBitmap? = remember(state.coverPreviewBitmap) {
+        state.coverPreviewBitmap?.asImageBitmap()
+    }
+
+    // 使用 derivedStateOf 将滑块连续微秒值收敛为离散缩略图索引，大幅降低拖动时的预览重组频率
+    val draggedThumbIndex by remember(timelineImageBitmaps.size, state.metadata.durationMs) {
+        derivedStateOf {
+            if (timelineImageBitmaps.isEmpty()) 0
+            else {
+                val ratio = (localCoverTimeUs / (state.metadata.durationMs * 1000f).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                (ratio * (timelineImageBitmaps.size - 1)).roundToInt()
+                    .coerceIn(0, timelineImageBitmaps.lastIndex)
+            }
+        }
+    }
+
+    val displayedCoverImageBitmap: ImageBitmap? = if (isDraggingCoverSlider && timelineImageBitmaps.isNotEmpty()) {
+        timelineImageBitmaps[draggedThumbIndex]
     } else {
-        state.coverPreviewBitmap ?: state.timelineThumbnails.firstOrNull()
+        coverPreviewImageBitmap ?: timelineImageBitmaps.firstOrNull()
     }
 
     Column(
@@ -791,7 +812,7 @@ private fun StudioEditorView(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         ExpressiveConnectedButtonGroup(
-            items = listOf("VIDEO", "COVER"),
+            items = PreviewModes,
             selectedItem = previewMode,
             onSelect = { mode -> previewMode = mode },
             labelProvider = { mode ->
@@ -824,7 +845,11 @@ private fun StudioEditorView(
                             )
                         }
                     },
-                    update = { view -> view.player = exoPlayer },
+                    update = { view ->
+                        if (view.player !== exoPlayer) {
+                            view.player = exoPlayer
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .expressiveBounceClick(pressedScale = 0.99f) {
@@ -839,9 +864,9 @@ private fun StudioEditorView(
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
                     )
-                } else if (displayedCoverBitmap != null) {
+                } else if (displayedCoverImageBitmap != null) {
                     Image(
-                        bitmap = displayedCoverBitmap.asImageBitmap(),
+                        bitmap = displayedCoverImageBitmap,
                         contentDescription = "封面预览",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
@@ -867,14 +892,14 @@ private fun StudioEditorView(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Icon(
-                    imageVector = if (previewMode == "VIDEO") Icons.Default.MotionPhotosOn else Icons.Default.CameraEnhance,
+                    imageVector = if (previewMode == "VIDEO") Icons.Rounded.MotionPhotosOn else Icons.Rounded.CameraEnhance,
                     contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(15.dp)
                 )
                 Text(
                     text = "${state.metadata.displayWidth}×${state.metadata.displayHeight} · ${
-                        String.format("%.1fs", (localTrimEndMs - localTrimStartMs) / 1000f)
+                        String.format(Locale.US, "%.1fs", (localTrimEndMs - localTrimStartMs) / 1000f)
                     }",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White
@@ -898,7 +923,7 @@ private fun StudioEditorView(
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                imageVector = if (isVideoPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                 modifier = Modifier.size(18.dp)
@@ -927,7 +952,7 @@ private fun StudioEditorView(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = String.format("%.2f 秒", localCoverTimeUs / 1_000_000f),
+                        text = String.format(Locale.US, "%.2f 秒", localCoverTimeUs / 1_000_000f),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -935,22 +960,22 @@ private fun StudioEditorView(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                if (state.timelineThumbnails.isNotEmpty()) {
+                if (timelineImageBitmaps.isNotEmpty()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(22.dp))
                             .background(MaterialTheme.colorScheme.surface),
                         horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
-                        state.timelineThumbnails.forEachIndexed { index, bmp ->
-                            val count = state.timelineThumbnails.size
+                        timelineImageBitmaps.forEachIndexed { index, imgBitmap ->
+                            val count = timelineImageBitmaps.size
                             val frameTimeUs = if (count > 1) {
                                 (state.metadata.durationMs * 1000L * index) / (count - 1)
                             } else 0L
                             Image(
-                                bitmap = bmp.asImageBitmap(),
+                                bitmap = imgBitmap,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
@@ -974,7 +999,9 @@ private fun StudioEditorView(
                     value = localCoverTimeUs.coerceIn(minUs, maxUs),
                     onValueChange = { newUs ->
                         isDraggingCoverSlider = true
-                        previewMode = "COVER"
+                        if (previewMode != "COVER") {
+                            previewMode = "COVER"
+                        }
                         localCoverTimeUs = newUs
                     },
                     onValueChangeFinished = {
@@ -1052,7 +1079,7 @@ private fun StudioEditorView(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Tune,
+                        imageVector = Icons.Rounded.Tune,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(19.dp)
@@ -1071,7 +1098,7 @@ private fun StudioEditorView(
                     }
                 }
                 Icon(
-                    imageVector = if (showAdvancedOptions) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    imageVector = if (showAdvancedOptions) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1080,8 +1107,8 @@ private fun StudioEditorView(
 
         AnimatedVisibility(
             visible = showAdvancedOptions,
-            enter = fadeIn(tween(180)) + expandVertically(tween(200)),
-            exit = fadeOut(tween(140)) + shrinkVertically(tween(160))
+            enter = fadeIn(tween(150)) + expandVertically(tween(170)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(140))
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -1106,7 +1133,7 @@ private fun StudioEditorView(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.ContentCut,
+                                    imageVector = Icons.Rounded.ContentCut,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(19.dp)
@@ -1118,8 +1145,8 @@ private fun StudioEditorView(
                                 )
                             }
                             Text(
-                                text = "${String.format("%.1fs", localTrimStartMs / 1000f)} — ${
-                                    String.format("%.1fs", localTrimEndMs / 1000f)
+                                text = "${String.format(Locale.US, "%.1fs", localTrimStartMs / 1000f)} — ${
+                                    String.format(Locale.US, "%.1fs", localTrimEndMs / 1000f)
                                 }",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary
@@ -1149,7 +1176,7 @@ private fun StudioEditorView(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (state.includeAudio) Icons.Default.MusicNote else Icons.Default.MusicOff,
+                                    imageVector = if (state.includeAudio) Icons.Rounded.MusicNote else Icons.Rounded.MusicOff,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.secondary
                                 )
@@ -1172,7 +1199,7 @@ private fun StudioEditorView(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             ExpressiveConnectedButtonGroup(
-                                items = listOf(88, 95, 100),
+                                items = QualityOptions,
                                 selectedItem = state.jpegQuality,
                                 onSelect = onUpdateQuality,
                                 labelProvider = { q ->
@@ -1222,7 +1249,7 @@ private fun StudioEditorView(
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             if (state.customCoverImageUri != null) {
-                                OutlinedButton(onClick = onClearCustomCover, shape = RoundedCornerShape(14.dp)) {
+                                OutlinedButton(onClick = onClearCustomCover, shape = RoundedCornerShape(22.dp)) {
                                     Text("还原")
                                 }
                             } else {
@@ -1231,7 +1258,7 @@ private fun StudioEditorView(
                                         previewMode = "COVER"
                                         onPickCustomCover()
                                     },
-                                    shape = RoundedCornerShape(14.dp)
+                                    shape = RoundedCornerShape(22.dp)
                                 ) {
                                     Text("选择照片")
                                 }
@@ -1258,11 +1285,11 @@ private fun StudioEditorView(
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             if (state.referenceExifImageUri != null) {
-                                OutlinedButton(onClick = onClearReferenceExif, shape = RoundedCornerShape(14.dp)) {
+                                OutlinedButton(onClick = onClearReferenceExif, shape = RoundedCornerShape(22.dp)) {
                                     Text("清除")
                                 }
                             } else {
-                                FilledTonalButton(onClick = onPickReferenceExif, shape = RoundedCornerShape(14.dp)) {
+                                FilledTonalButton(onClick = onPickReferenceExif, shape = RoundedCornerShape(22.dp)) {
                                     Text("选择样张")
                                 }
                             }
@@ -1275,7 +1302,7 @@ private fun StudioEditorView(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             ExpressiveConnectedButtonGroup(
-                                items = MotionPhotoBuilder.LongExposureMode.values().toList(),
+                                items = MotionPhotoBuilder.LongExposureMode.Entries,
                                 selectedItem = state.longExposureMode,
                                 onSelect = { mode ->
                                     previewMode = "COVER"
@@ -1292,7 +1319,7 @@ private fun StudioEditorView(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             ExpressiveConnectedButtonGroup(
-                                items = MotionPhotoBuilder.CoverFilter.values().toList(),
+                                items = MotionPhotoBuilder.CoverFilter.Entries,
                                 selectedItem = state.coverFilter,
                                 onSelect = { filter ->
                                     previewMode = "COVER"
@@ -1384,7 +1411,7 @@ private fun StudioEditorView(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
-                MotionPhotoBuilder.OutputFormat.values().forEach { fmt ->
+                MotionPhotoBuilder.OutputFormat.Entries.forEach { fmt ->
                     val selected = fmt == state.selectedFormat
                     Surface(
                         modifier = Modifier
@@ -1420,7 +1447,7 @@ private fun StudioEditorView(
                             }
                             if (selected) {
                                 Icon(
-                                    imageVector = Icons.Default.CheckCircle,
+                                    imageVector = Icons.Rounded.CheckCircle,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary
                                 )
@@ -1438,8 +1465,7 @@ private fun StudioEditorView(
 private fun StudioConvertingView(
     progress: Float,
     stage: MotionPhotoBuilder.ConversionProgress.Stage,
-    detailMessage: String,
-    format: MotionPhotoBuilder.OutputFormat
+    detailMessage: String
 ) {
     Column(
         modifier = Modifier
@@ -1544,7 +1570,7 @@ private fun StudioSuccessView(
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = Icons.Default.Check,
+                            imageVector = Icons.Rounded.Check,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(24.dp)
@@ -1590,7 +1616,7 @@ private fun StudioSuccessView(
                     .height(54.dp),
                 shape = RoundedCornerShape(20.dp)
             ) {
-                Icon(imageVector = Icons.Default.Verified, contentDescription = null)
+                Icon(imageVector = Icons.Rounded.Verified, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("查看详情", fontWeight = FontWeight.Bold)
             }
@@ -1602,7 +1628,7 @@ private fun StudioSuccessView(
                     .height(54.dp),
                 shape = RoundedCornerShape(20.dp)
             ) {
-                Icon(imageVector = Icons.Default.Share, contentDescription = null)
+                Icon(imageVector = Icons.Rounded.Share, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("分享", fontWeight = FontWeight.Bold)
             }
@@ -1615,7 +1641,7 @@ private fun StudioSuccessView(
                 .height(52.dp),
             shape = RoundedCornerShape(20.dp)
         ) {
-            Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+            Icon(imageVector = Icons.Rounded.Refresh, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("继续制作", fontWeight = FontWeight.Bold)
         }
@@ -1668,7 +1694,7 @@ private fun StudioErrorView(
             secondaryColor = MaterialTheme.colorScheme.errorContainer
         ) {
             Icon(
-                imageVector = Icons.Default.ErrorOutline,
+                imageVector = Icons.Rounded.ErrorOutline,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.size(48.dp)
@@ -1692,14 +1718,14 @@ private fun StudioErrorView(
             OutlinedButton(
                 onClick = onBack,
                 modifier = Modifier.height(50.dp),
-                shape = RoundedCornerShape(18.dp)
+                shape = RoundedCornerShape(26.dp)
             ) {
                 Text("返回")
             }
             Button(
                 onClick = onRetry,
                 modifier = Modifier.height(50.dp),
-                shape = RoundedCornerShape(18.dp)
+                shape = RoundedCornerShape(26.dp)
             ) {
                 Text("重试")
             }
@@ -1754,7 +1780,7 @@ private fun InspectorTabContent(
                         .height(52.dp),
                     shape = RoundedCornerShape(20.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null)
+                    Icon(imageVector = Icons.Rounded.FolderOpen, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("选择照片", fontWeight = FontWeight.Bold)
                 }
@@ -1775,7 +1801,7 @@ private fun InspectorTabContent(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Verified,
+                            imageVector = Icons.Rounded.Verified,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                             modifier = Modifier.size(40.dp)
@@ -1834,7 +1860,7 @@ private fun InspectorTabContent(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Icon(
-                                imageVector = if (report.isValidMotionPhoto) Icons.Default.Verified else Icons.Default.Info,
+                                imageVector = if (report.isValidMotionPhoto) Icons.Rounded.Verified else Icons.Rounded.Info,
                                 contentDescription = null,
                                 tint = if (report.isValidMotionPhoto) {
                                     MaterialTheme.colorScheme.primary
@@ -1884,7 +1910,7 @@ private fun InspectorTabContent(
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp),
-                                    shape = RoundedCornerShape(16.dp)
+                                    shape = RoundedCornerShape(24.dp)
                                 ) {
                                     Text("保存视频", fontWeight = FontWeight.Bold)
                                 }
@@ -1894,7 +1920,7 @@ private fun InspectorTabContent(
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp),
-                                    shape = RoundedCornerShape(16.dp)
+                                    shape = RoundedCornerShape(24.dp)
                                 ) {
                                     Text("保存图片", fontWeight = FontWeight.Bold)
                                 }
@@ -1905,9 +1931,9 @@ private fun InspectorTabContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(48.dp),
-                                shape = RoundedCornerShape(16.dp)
+                                shape = RoundedCornerShape(24.dp)
                             ) {
-                                Icon(imageVector = Icons.Default.Build, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(imageVector = Icons.Rounded.Build, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("修复并重新保存到相册", fontWeight = FontWeight.Bold)
                             }
@@ -1938,9 +1964,9 @@ private fun InspectorTabContent(
                             FilledTonalButton(
                                 onClick = { showRawXmp = !showRawXmp },
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(14.dp)
+                                shape = RoundedCornerShape(22.dp)
                             ) {
-                                Icon(imageVector = Icons.Default.Code, contentDescription = null)
+                                Icon(imageVector = Icons.Rounded.Code, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(if (showRawXmp) "收起 XMP 信息" else "查看 XMP 信息")
                             }
@@ -1950,7 +1976,7 @@ private fun InspectorTabContent(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 6.dp),
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = RoundedCornerShape(22.dp),
                                     color = MaterialTheme.colorScheme.surface
                                 ) {
                                     Text(
@@ -1975,69 +2001,84 @@ private fun InspectorTabContent(
     }
 }
 
+/**
+ * 作品历史记录页（采用高性能 LazyColumn + 预计算元数据 + 缩略图精确采样，消除滚动掉帧）
+ */
 @Composable
-private fun GalleryAndGuideTabContent(
-    historyFiles: List<File>,
+private fun GalleryTabContent(
+    historyItems: List<MainViewModel.HistoryPhotoItem>,
     onInspectFile: (File) -> Unit,
     onShareFile: (File) -> Unit,
     onDeleteFile: (File) -> Unit,
     onPickVideo: () -> Unit
 ) {
-    val scrollState = rememberScrollState()
-    val dateFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+    val context = LocalContext.current
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "历史记录 (${historyFiles.size})",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold
-        )
+        item(key = "header", contentType = "header") {
+            Text(
+                text = "历史记录 (${historyItems.size})",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+        }
 
-        if (historyFiles.isEmpty()) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+        if (historyItems.isEmpty()) {
+            item(key = "empty_state", contentType = "empty") {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.PhotoAlbum,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(44.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "暂无记录",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
-                    FilledTonalButton(
-                        onClick = onPickVideo,
-                        shape = RoundedCornerShape(18.dp)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("去制作")
+                        Icon(
+                            imageVector = Icons.Rounded.PhotoAlbum,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(44.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "暂无记录",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        FilledTonalButton(
+                            onClick = onPickVideo,
+                            shape = RoundedCornerShape(26.dp)
+                        ) {
+                            Text("去制作")
+                        }
                     }
                 }
             }
         } else {
-            historyFiles.forEach { file ->
+            items(
+                items = historyItems,
+                key = { it.key },
+                contentType = { "history_item" }
+            ) { item ->
+                val thumbRequest = remember(context, item.key) {
+                    ImageRequest.Builder(context)
+                        .data(item.file)
+                        .size(204, 204)
+                        .precision(Precision.INEXACT)
+                        .crossfade(false)
+                        .build()
+                }
+
                 Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .animateContentSize(animationSpec = ExpressiveMotion.defaultSpatial()),
+                    modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
                 ) {
@@ -2049,18 +2090,18 @@ private fun GalleryAndGuideTabContent(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         AsyncImage(
-                            model = file,
-                            contentDescription = file.name,
+                            model = thumbRequest,
+                            contentDescription = item.name,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .size(68.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .expressiveBounceClick { onInspectFile(file) }
+                                .clip(RoundedCornerShape(20.dp))
+                                .expressiveBounceClick { onInspectFile(item.file) }
                         )
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = file.name,
+                                text = item.name,
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
@@ -2068,30 +2109,30 @@ private fun GalleryAndGuideTabContent(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "${formatBytes(file.length())} · ${dateFormat.format(Date(file.lastModified()))}",
+                                text = item.formattedMeta,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
 
                         Row {
-                            IconButton(onClick = { onInspectFile(file) }) {
+                            IconButton(onClick = { onInspectFile(item.file) }) {
                                 Icon(
-                                    imageVector = Icons.Default.PlayArrow,
+                                    imageVector = Icons.Rounded.PlayArrow,
                                     contentDescription = "查看",
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                             }
-                            IconButton(onClick = { onShareFile(file) }) {
+                            IconButton(onClick = { onShareFile(item.file) }) {
                                 Icon(
-                                    imageVector = Icons.Default.Share,
+                                    imageVector = Icons.Rounded.Share,
                                     contentDescription = "分享",
                                     tint = MaterialTheme.colorScheme.secondary
                                 )
                             }
-                            IconButton(onClick = { onDeleteFile(file) }) {
+                            IconButton(onClick = { onDeleteFile(item.file) }) {
                                 Icon(
-                                    imageVector = Icons.Default.DeleteOutline,
+                                    imageVector = Icons.Rounded.DeleteOutline,
                                     contentDescription = "删除",
                                     tint = MaterialTheme.colorScheme.error
                                 )
@@ -2102,238 +2143,9 @@ private fun GalleryAndGuideTabContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-    }
-}
-
-/**
- * Tab 4：关于页面 (黑白君 · 抖音号 heibaijunbenjun · 二维码)
- */
-@Composable
-private fun AboutAuthorTabContent(
-    onShowToast: (String) -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val scrollState = rememberScrollState()
-    var showZoomQrDialog by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(30.dp),
-            color = MaterialTheme.colorScheme.primaryContainer
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Surface(
-                    modifier = Modifier.size(64.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = "黑白君",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(34.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text(
-                    text = "黑白君",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                ) {
-                    Text(
-                        text = "抖音号：heibaijunbenjun",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                            clipboard?.setPrimaryClip(ClipData.newPlainText("抖音号", "heibaijunbenjun"))
-                            onShowToast("已复制抖音号：heibaijunbenjun")
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp),
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("复制抖音号", fontWeight = FontWeight.Bold)
-                    }
-
-                    FilledTonalButton(
-                        onClick = {
-                            scope.launch {
-                                val savedPath = saveQrDrawableToGallery(context)
-                                if (savedPath != null) {
-                                    onShowToast("已保存到相册：$savedPath")
-                                } else {
-                                    onShowToast("保存失败，请检查相册权限")
-                                }
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp),
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("保存二维码", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
+        item(key = "bottom_spacer", contentType = "spacer") {
+            Spacer(modifier = Modifier.height(24.dp))
         }
-
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .expressiveBounceClick(pressedScale = 0.98f) {
-                    showZoomQrDialog = true
-                },
-            shape = RoundedCornerShape(30.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.50f)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.QrCode2,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "打开抖音扫一扫",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Image(
-                    painter = painterResource(id = R.drawable.douyin_qr_heibaijun),
-                    contentDescription = "黑白君抖音二维码",
-                    contentScale = ContentScale.FillWidth,
-                    modifier = Modifier
-                        .fillMaxWidth(0.86f)
-                        .clip(RoundedCornerShape(24.dp))
-                )
-            }
-        }
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f)
-        ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                MetricRow("作者", "黑白君")
-                MetricRow("抖音号", "heibaijunbenjun")
-                MetricRow("版本", "1.2.0")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-    }
-
-    if (showZoomQrDialog) {
-        Dialog(onDismissRequest = { showZoomQrDialog = false }) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .expressiveBounceClick { showZoomQrDialog = false },
-                shape = RoundedCornerShape(28.dp),
-                color = Color.Transparent
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.douyin_qr_heibaijun),
-                    contentDescription = "黑白君抖音二维码",
-                    contentScale = ContentScale.FillWidth,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(28.dp))
-                )
-            }
-        }
-    }
-}
-
-private suspend fun saveQrDrawableToGallery(context: Context): String? = withContext(Dispatchers.IO) {
-    try {
-        val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.douyin_qr_heibaijun)
-            ?: return@withContext null
-        val outName = "Douyin_Heibaijun_QR.jpg"
-        val resolver = context.contentResolver
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, outName)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/MotionStudio")
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-            }
-        }
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            ?: return@withContext null
-        resolver.openOutputStream(uri)?.use { out ->
-            bmp.compress(Bitmap.CompressFormat.JPEG, 95, out)
-        }
-        bmp.recycle()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
-            resolver.update(uri, done, null, null)
-        }
-        "Pictures/MotionStudio/$outName"
-    } catch (_: Exception) {
-        null
     }
 }
 
@@ -2342,6 +2154,7 @@ private fun ThemeCustomizationSheet(
     settings: MainViewModel.ThemeSettings,
     onSelectPalette: (ExpressivePalette) -> Unit,
     onToggleDynamic: (Boolean) -> Unit,
+    onOpenLiquidGlass: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     Column(
@@ -2389,7 +2202,7 @@ private fun ThemeCustomizationSheet(
             }
         }
 
-        ExpressivePalette.values().forEach { palette ->
+        ExpressivePalette.Entries.forEach { palette ->
             val selected = !settings.useDynamicColor && settings.palette == palette
             Surface(
                 modifier = Modifier
@@ -2431,7 +2244,7 @@ private fun ThemeCustomizationSheet(
                     }
                     if (selected) {
                         Icon(
-                            imageVector = Icons.Default.CheckCircle,
+                            imageVector = Icons.Rounded.CheckCircle,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary
                         )
@@ -2440,16 +2253,268 @@ private fun ThemeCustomizationSheet(
             }
         }
 
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .expressiveBounceClick { onOpenLiquidGlass() },
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "底部栏液态玻璃调节",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "自由调节模糊度、折射曲率、色散与透光率",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Rounded.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun LiquidGlassTunerSheet(
+    config: MainViewModel.LiquidGlassConfig,
+    onUpdateConfig: ((MainViewModel.LiquidGlassConfig) -> MainViewModel.LiquidGlassConfig) -> Unit,
+    onSelectPreset: (MainViewModel.LiquidGlassPreset) -> Unit,
+    onResetDefault: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "底部栏液态玻璃",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = "基于开源 Kyant0/AndroidLiquidGlass 光学折射与色散着色器",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = config.enabled,
+                onCheckedChange = { enabled ->
+                    onUpdateConfig { it.copy(enabled = enabled) }
+                }
+            )
+        }
+
+        // 预设风格选择
+        Text(
+            text = "光学预设",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MainViewModel.LiquidGlassPreset.Entries.forEach { preset ->
+                val isSelected = config.preset == preset && config.enabled
+                Surface(
+                    modifier = Modifier.expressiveBounceClick(pressedScale = 0.94f) {
+                        onSelectPreset(preset)
+                    },
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                    }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = preset.title,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            }
+                        )
+                        Text(
+                            text = preset.subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // 1. 模糊半径
+        LiquidGlassSliderItem(
+            title = "背景模糊半径",
+            valueText = "${config.blurRadiusDp.roundToInt()} dp",
+            value = config.blurRadiusDp,
+            valueRange = 0f..36f,
+            enabled = config.enabled,
+            onValueChange = { v ->
+                onUpdateConfig { it.copy(blurRadiusDp = v, preset = null) }
+            }
+        )
+
+        // 2. 透镜折射曲率
+        LiquidGlassSliderItem(
+            title = "透镜折射曲率",
+            valueText = "${(config.refractionStrength * 100).roundToInt()}%",
+            value = config.refractionStrength,
+            valueRange = 0f..1f,
+            enabled = config.enabled,
+            onValueChange = { v ->
+                onUpdateConfig { it.copy(refractionStrength = v, preset = null) }
+            }
+        )
+
+        // 3. 边缘棱镜色散
+        LiquidGlassSliderItem(
+            title = "边缘棱镜色散",
+            valueText = "${(config.dispersionStrength * 100).roundToInt()}%",
+            value = config.dispersionStrength,
+            valueRange = 0f..1f,
+            enabled = config.enabled,
+            onValueChange = { v ->
+                onUpdateConfig { it.copy(dispersionStrength = v, preset = null) }
+            }
+        )
+
+        // 4. 玻璃漫射浓度
+        LiquidGlassSliderItem(
+            title = "玻璃透光浓度",
+            valueText = "${(config.tintAlpha * 100).roundToInt()}%",
+            value = config.tintAlpha,
+            valueRange = 0.05f..0.85f,
+            enabled = config.enabled,
+            onValueChange = { v ->
+                onUpdateConfig { it.copy(tintAlpha = v, preset = null) }
+            }
+        )
+
+        // 5. 菲涅尔边缘高光
+        LiquidGlassSliderItem(
+            title = "菲涅尔边缘高光",
+            valueText = "${(config.specularStrength * 100).roundToInt()}%",
+            value = config.specularStrength,
+            valueRange = 0f..1f,
+            enabled = config.enabled,
+            onValueChange = { v ->
+                onUpdateConfig { it.copy(specularStrength = v, preset = null) }
+            }
+        )
+
+        // 6. 胶囊圆角弧度
+        LiquidGlassSliderItem(
+            title = "胶囊圆角弧度",
+            valueText = "${config.cornerRadiusDp.roundToInt()} dp",
+            value = config.cornerRadiusDp,
+            valueRange = 16f..32f,
+            enabled = config.enabled,
+            onValueChange = { v ->
+                onUpdateConfig { it.copy(cornerRadiusDp = v, preset = null) }
+            }
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            OutlinedButton(
+                onClick = onResetDefault,
+                shape = CircleShape
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("恢复默认参数")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun LiquidGlassSliderItem(
+    title: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    enabled: Boolean,
+    onValueChange: (Float) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = valueText,
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            enabled = enabled
+        )
     }
 }
 
 private fun formatBytes(bytes: Long): String {
     if (bytes <= 0L) return "0 B"
     val kb = bytes / 1024.0
-    if (kb < 1024.0) return String.format("%.1f KB", kb)
+    if (kb < 1024.0) return String.format(Locale.US, "%.1f KB", kb)
     val mb = kb / 1024.0
-    return String.format("%.2f MB", mb)
+    return String.format(Locale.US, "%.2f MB", mb)
 }
 
 private fun shareMotionPhoto(context: Context, file: File) {

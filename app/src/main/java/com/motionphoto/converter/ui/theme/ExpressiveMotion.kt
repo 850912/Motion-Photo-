@@ -2,11 +2,13 @@ package com.motionphoto.converter.ui.theme
 
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -15,38 +17,59 @@ import androidx.compose.ui.graphics.graphicsLayer
 
 /**
  * Material 3 Expressive (MD3E) 高响应物理弹簧动效引擎
- * 针对 120Hz 触控响应进行了高刚度优化 (stiffness 提升，消除拖泥带水感)
+ * 针对 120Hz 触控响应进行了高刚度与零分配优化（复用静态 SpringSpec 实例，避免重组时重复分配对象）
  */
 object ExpressiveMotion {
 
-    fun <T> fastSpatial(): FiniteAnimationSpec<T> = spring(
-        dampingRatio = 0.68f,
-        stiffness = 1800f
+    private val FastSpatialSpec: SpringSpec<Any> = spring(
+        dampingRatio = 0.72f,
+        stiffness = 2200f
     )
 
-    fun <T> defaultSpatial(): FiniteAnimationSpec<T> = spring(
-        dampingRatio = 0.74f,
-        stiffness = 950f
-    )
-
-    fun <T> slowSpatial(): FiniteAnimationSpec<T> = spring(
+    private val DefaultSpatialSpec: SpringSpec<Any> = spring(
         dampingRatio = 0.78f,
-        stiffness = 500f
+        stiffness = 1100f
     )
 
-    fun <T> fastEffects(): FiniteAnimationSpec<T> = spring(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = 3400f
+    private val SlowSpatialSpec: SpringSpec<Any> = spring(
+        dampingRatio = 0.82f,
+        stiffness = 550f
     )
 
-    fun <T> defaultEffects(): FiniteAnimationSpec<T> = spring(
+    private val FastEffectsSpec: SpringSpec<Any> = spring(
         dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = 1800f
+        stiffness = 3800f
     )
+
+    private val DefaultEffectsSpec: SpringSpec<Any> = spring(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = 2000f
+    )
+
+    @Stable
+    @Suppress("UNCHECKED_CAST")
+    fun <T> fastSpatial(): FiniteAnimationSpec<T> = FastSpatialSpec as FiniteAnimationSpec<T>
+
+    @Stable
+    @Suppress("UNCHECKED_CAST")
+    fun <T> defaultSpatial(): FiniteAnimationSpec<T> = DefaultSpatialSpec as FiniteAnimationSpec<T>
+
+    @Stable
+    @Suppress("UNCHECKED_CAST")
+    fun <T> slowSpatial(): FiniteAnimationSpec<T> = SlowSpatialSpec as FiniteAnimationSpec<T>
+
+    @Stable
+    @Suppress("UNCHECKED_CAST")
+    fun <T> fastEffects(): FiniteAnimationSpec<T> = FastEffectsSpec as FiniteAnimationSpec<T>
+
+    @Stable
+    @Suppress("UNCHECKED_CAST")
+    fun <T> defaultEffects(): FiniteAnimationSpec<T> = DefaultEffectsSpec as FiniteAnimationSpec<T>
 }
 
 /**
  * 零重组开销的 GPU 硬件层 (`graphicsLayer`) 按压回弹修饰符
+ * 仅在 graphicsLayer 阶段读取 scaleState.value，完全跳过 Composition 与 Layout 阶段
  */
 fun Modifier.expressiveBounceClick(
     enabled: Boolean = true,
@@ -55,15 +78,16 @@ fun Modifier.expressiveBounceClick(
 ): Modifier = composed {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
+    val scaleState = animateFloatAsState(
         targetValue = if (isPressed && enabled) pressedScale else 1f,
         animationSpec = ExpressiveMotion.fastSpatial(),
         label = "expressive_press_scale"
     )
     this
         .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
+            val s = scaleState.value
+            scaleX = s
+            scaleY = s
         }
         .clickable(
             interactionSource = interactionSource,

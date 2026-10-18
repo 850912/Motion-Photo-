@@ -10,6 +10,8 @@ import com.adobe.internal.xmp.XMPMeta
 import com.adobe.internal.xmp.XMPMetaFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -21,11 +23,13 @@ import java.util.Locale
 /**
  * 动态照片（Motion Photo）二进制容器检验、无损拆解 (Demuxer) 与一键修复器 (Repair)
  *
- * 参考开源项目：
- * - googleinterns/libmphoto (Demuxer: 分离静态主图与内嵌 MP4 视频流)
- * - wszqkzqk/live-photo-conv (live-photo-extract & live-photo-repair: 自动扫描 ftyp 偏移并重建损坏的 XMP 容器目录)
+ * 优化点：
+ * - 全链路 64KB 缓冲流加速文件读取与分离
+ * - 自动清理旧的 inspected_motion_* 临时缓存视频，防止缓存膨胀
  */
 object MotionPhotoInspector {
+
+    private const val IO_BUFFER_SIZE = 64 * 1024
 
     data class InspectionReport(
         val fileName: String,
@@ -55,8 +59,8 @@ object MotionPhotoInspector {
         try {
             val tempCopy = File(context.cacheDir, "inspect_source_${System.currentTimeMillis()}.jpg")
             context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tempCopy).use { out ->
-                    input.copyTo(out)
+                BufferedOutputStream(FileOutputStream(tempCopy), IO_BUFFER_SIZE).use { out ->
+                    input.copyTo(out, IO_BUFFER_SIZE)
                 }
             } ?: return@withContext Result.failure(IllegalArgumentException("无法读取所选文件"))
 
@@ -78,6 +82,9 @@ object MotionPhotoInspector {
             if (!file.exists() || file.length() < 16) {
                 return@withContext Result.failure(IllegalArgumentException("文件不存在或体积过小"))
             }
+
+            // 清理之前检验遗留的临时视频文件
+            cleanupOldInspectedVideos(context.cacheDir)
 
             val totalSize = file.length()
             val fileName = displayNameOverride ?: file.name
@@ -226,8 +233,16 @@ object MotionPhotoInspector {
         }
     }
 
+    private fun cleanupOldInspectedVideos(cacheDir: File) {
+        try {
+            cacheDir.listFiles { f ->
+                f.isFile && f.name.startsWith("inspected_motion_") && f.name.endsWith(".mp4")
+            }?.forEach { it.delete() }
+        } catch (_: Exception) {}
+    }
+
     /**
-     * 开源功能 1 (libmphoto / live-photo-extract)：将实况照片中的内嵌 MP4 独立无损导出至系统相册 Movies/MotionStudio
+     * 将实况照片中的内嵌 MP4 独立无损导出至系统相册 Movies/MotionStudio
      */
     suspend fun exportEmbeddedVideoToGallery(
         context: Context,
@@ -255,7 +270,7 @@ object MotionPhotoInspector {
                 ?: return@withContext Result.failure(IllegalStateException("无法创建相册视频条目"))
 
             resolver.openOutputStream(uri)?.use { out ->
-                FileInputStream(videoFile).use { it.copyTo(out) }
+                BufferedInputStream(FileInputStream(videoFile), IO_BUFFER_SIZE).use { it.copyTo(out, IO_BUFFER_SIZE) }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val done = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
@@ -268,7 +283,7 @@ object MotionPhotoInspector {
     }
 
     /**
-     * 开源功能 2 (libmphoto / live-photo-extract)：剥离尾部视频，将纯净高清静态 JPG 导出至 Pictures/MotionStudio
+     * 剥离尾部视频，将纯净高清静态 JPG 导出至 Pictures/MotionStudio
      */
     suspend fun exportStillImageToGallery(
         context: Context,
@@ -295,8 +310,8 @@ object MotionPhotoInspector {
 
             val bytesToCopy = report.jpegPortionSize.coerceAtMost(tempSource.length())
             resolver.openOutputStream(uri)?.use { out ->
-                FileInputStream(tempSource).use { input ->
-                    val buf = ByteArray(16 * 1024)
+                BufferedInputStream(FileInputStream(tempSource), IO_BUFFER_SIZE).use { input ->
+                    val buf = ByteArray(IO_BUFFER_SIZE)
                     var remaining = bytesToCopy
                     while (remaining > 0) {
                         val toRead = minOf(buf.size.toLong(), remaining).toInt()
@@ -320,8 +335,7 @@ object MotionPhotoInspector {
     }
 
     /**
-     * 开源功能 3 (wszqkzqk/live-photo-conv live-photo-repair)：
-     * 一键修复损坏或无法被系统相册识别的实况照片（重新校准尾部 MP4 偏移、重写全品牌通用 XMP 并存入 DCIM/Camera）
+     * 一键修复损坏或无法被系统相册识别的实况照片
      */
     suspend fun repairMotionPhotoToGallery(
         context: Context,
@@ -336,9 +350,9 @@ object MotionPhotoInspector {
 
             // 1. 截取纯净 JPEG 头部
             val pureJpeg = File(context.cacheDir, "repair_head_${System.currentTimeMillis()}.jpg")
-            FileInputStream(tempSource).use { input ->
-                FileOutputStream(pureJpeg).use { out ->
-                    val buf = ByteArray(16 * 1024)
+            BufferedInputStream(FileInputStream(tempSource), IO_BUFFER_SIZE).use { input ->
+                BufferedOutputStream(FileOutputStream(pureJpeg), IO_BUFFER_SIZE).use { out ->
+                    val buf = ByteArray(IO_BUFFER_SIZE)
                     var remaining = report.jpegPortionSize.coerceAtMost(tempSource.length())
                     while (remaining > 0) {
                         val toRead = minOf(buf.size.toLong(), remaining).toInt()
@@ -370,9 +384,9 @@ object MotionPhotoInspector {
                 if (!exists()) mkdirs()
             }
             val repairedFile = File(appOutDir, outName)
-            FileOutputStream(repairedFile).use { out ->
-                FileInputStream(jpegWithXmp).use { it.copyTo(out) }
-                FileInputStream(videoFile).use { it.copyTo(out) }
+            BufferedOutputStream(FileOutputStream(repairedFile), IO_BUFFER_SIZE).use { out ->
+                BufferedInputStream(FileInputStream(jpegWithXmp), IO_BUFFER_SIZE).use { it.copyTo(out, IO_BUFFER_SIZE) }
+                BufferedInputStream(FileInputStream(videoFile), IO_BUFFER_SIZE).use { it.copyTo(out, IO_BUFFER_SIZE) }
             }
             jpegWithXmp.delete()
 
@@ -388,7 +402,7 @@ object MotionPhotoInspector {
             val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             if (uri != null) {
                 resolver.openOutputStream(uri)?.use { out ->
-                    FileInputStream(repairedFile).use { it.copyTo(out) }
+                    BufferedInputStream(FileInputStream(repairedFile), IO_BUFFER_SIZE).use { it.copyTo(out, IO_BUFFER_SIZE) }
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
@@ -408,12 +422,14 @@ object MotionPhotoInspector {
             when (sourceUriOrFile) {
                 is File -> {
                     if (!sourceUriOrFile.exists()) return null
-                    sourceUriOrFile.copyTo(temp, overwrite = true)
+                    sourceUriOrFile.copyTo(temp, overwrite = true, bufferSize = IO_BUFFER_SIZE)
                     temp
                 }
                 is Uri -> {
                     context.contentResolver.openInputStream(sourceUriOrFile)?.use { input ->
-                        FileOutputStream(temp).use { out -> input.copyTo(out) }
+                        BufferedOutputStream(FileOutputStream(temp), IO_BUFFER_SIZE).use { out ->
+                            input.copyTo(out, IO_BUFFER_SIZE)
+                        }
                     } ?: return null
                     temp
                 }
@@ -469,7 +485,7 @@ object MotionPhotoInspector {
         return try {
             RandomAccessFile(file, "r").use { raf ->
                 val len = raf.length()
-                val buf = ByteArray(64 * 1024)
+                val buf = ByteArray(IO_BUFFER_SIZE)
                 var offset = 0L
                 while (offset < len - 12) {
                     raf.seek(offset)
@@ -500,15 +516,15 @@ object MotionPhotoInspector {
     }
 
     private fun extractTailBytes(source: File, startOffset: Long, dest: File) {
-        FileInputStream(source).use { input ->
-            FileOutputStream(dest).use { output ->
+        BufferedInputStream(FileInputStream(source), IO_BUFFER_SIZE).use { input ->
+            BufferedOutputStream(FileOutputStream(dest), IO_BUFFER_SIZE).use { output ->
                 var remainingSkip = startOffset
                 while (remainingSkip > 0) {
                     val skipped = input.skip(remainingSkip)
                     if (skipped <= 0) break
                     remainingSkip -= skipped
                 }
-                input.copyTo(output)
+                input.copyTo(output, IO_BUFFER_SIZE)
             }
         }
     }

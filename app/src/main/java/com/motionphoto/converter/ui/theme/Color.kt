@@ -38,7 +38,11 @@ enum class ExpressivePalette(
         subtitle = "清澈冰蓝科技感",
         seedColor = Color(0xFF006493),
         accentPreview = Color(0xFF8ECDFF)
-    )
+    );
+
+    companion object {
+        val Entries: List<ExpressivePalette> = values().toList()
+    }
 }
 
 // 1. IRIS VIOLET (MD3 Expressive Default)

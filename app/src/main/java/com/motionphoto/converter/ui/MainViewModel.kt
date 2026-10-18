@@ -4,12 +4,15 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.motionphoto.converter.core.MotionPhotoBuilder
 import com.motionphoto.converter.core.MotionPhotoInspector
 import com.motionphoto.converter.ui.components.AppTab
 import com.motionphoto.converter.ui.theme.ExpressivePalette
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,16 +20,99 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val motionPhotoBuilder = MotionPhotoBuilder(application)
 
+    enum class LiquidGlassPreset(
+        val title: String,
+        val subtitle: String,
+        val blurRadiusDp: Float,
+        val refractionStrength: Float,
+        val dispersionStrength: Float,
+        val tintAlpha: Float,
+        val specularStrength: Float,
+        val cornerRadiusDp: Float
+    ) {
+        CRYSTAL_DROP(
+            title = "灵动水滴",
+            subtitle = "高折射清透水滴质感",
+            blurRadiusDp = 16f,
+            refractionStrength = 0.65f,
+            dispersionStrength = 0.50f,
+            tintAlpha = 0.22f,
+            specularStrength = 0.80f,
+            cornerRadiusDp = 32f
+        ),
+        FROSTED_MIST(
+            title = "柔雾磨砂",
+            subtitle = "柔和漫射高模糊毛玻璃",
+            blurRadiusDp = 28f,
+            refractionStrength = 0.30f,
+            dispersionStrength = 0.20f,
+            tintAlpha = 0.45f,
+            specularStrength = 0.50f,
+            cornerRadiusDp = 32f
+        ),
+        PRISM_LENS(
+            title = "高折棱镜",
+            subtitle = "强曲面折射与边缘色散",
+            blurRadiusDp = 12f,
+            refractionStrength = 0.90f,
+            dispersionStrength = 0.85f,
+            tintAlpha = 0.18f,
+            specularStrength = 0.95f,
+            cornerRadiusDp = 32f
+        ),
+        CLASSIC_SOLID(
+            title = "温润玉石",
+            subtitle = "低透光高饱和温润质感",
+            blurRadiusDp = 22f,
+            refractionStrength = 0.40f,
+            dispersionStrength = 0.25f,
+            tintAlpha = 0.72f,
+            specularStrength = 0.60f,
+            cornerRadiusDp = 28f
+        );
+
+        companion object {
+            val Entries: List<LiquidGlassPreset> = values().toList()
+        }
+    }
+
+    @Immutable
+    data class LiquidGlassConfig(
+        val enabled: Boolean = true,
+        val preset: LiquidGlassPreset? = LiquidGlassPreset.CRYSTAL_DROP,
+        val blurRadiusDp: Float = 16f,
+        val refractionStrength: Float = 0.65f,
+        val dispersionStrength: Float = 0.50f,
+        val tintAlpha: Float = 0.22f,
+        val specularStrength: Float = 0.80f,
+        val cornerRadiusDp: Float = 32f
+    )
+
+    @Immutable
     data class ThemeSettings(
         val palette: ExpressivePalette = ExpressivePalette.IRIS_VIOLET,
         val darkModeOverride: Boolean? = null,
-        val useDynamicColor: Boolean = false
+        val useDynamicColor: Boolean = false,
+        val liquidGlass: LiquidGlassConfig = LiquidGlassConfig()
+    )
+
+    @Immutable
+    data class HistoryPhotoItem(
+        val file: File,
+        val key: String,
+        val name: String,
+        val formattedMeta: String,
+        val lastModified: Long
     )
 
     private val _themeSettings = MutableStateFlow(ThemeSettings())
@@ -38,9 +124,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _statusBannerMessage = MutableStateFlow<String?>(null)
     val statusBannerMessage: StateFlow<String?> = _statusBannerMessage.asStateFlow()
 
+    @Stable
     sealed class StudioState {
         object Idle : StudioState()
 
+        @Stable
         data class Editing(
             val videoUri: Uri,
             val metadata: MotionPhotoBuilder.VideoMetadata,
@@ -62,6 +150,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val isLoadingThumbnails: Boolean = true
         ) : StudioState()
 
+        @Immutable
         data class Converting(
             val progress: Float,
             val stage: MotionPhotoBuilder.ConversionProgress.Stage,
@@ -70,11 +159,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val batchInfo: String? = null
         ) : StudioState()
 
+        @Immutable
         data class Success(
             val result: MotionPhotoBuilder.ConversionResult,
             val batchCount: Int = 1
         ) : StudioState()
 
+        @Immutable
         data class Error(
             val message: String,
             val previousUri: Uri? = null
@@ -84,33 +175,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _studioState = MutableStateFlow<StudioState>(StudioState.Idle)
     val studioState: StateFlow<StudioState> = _studioState.asStateFlow()
 
+    @Stable
     sealed class InspectorState {
         object Idle : InspectorState()
         object Inspecting : InspectorState()
+
+        @Stable
         data class ResultReady(
             val sourceUriOrFile: Any,
             val report: MotionPhotoInspector.InspectionReport,
             val actionFeedback: String? = null
         ) : InspectorState()
+
+        @Immutable
         data class Error(val message: String) : InspectorState()
     }
 
     private val _inspectorState = MutableStateFlow<InspectorState>(InspectorState.Idle)
     val inspectorState: StateFlow<InspectorState> = _inspectorState.asStateFlow()
 
-    private val _historyFiles = MutableStateFlow<List<File>>(emptyList())
-    val historyFiles: StateFlow<List<File>> = _historyFiles.asStateFlow()
+    private val _historyFiles = MutableStateFlow<List<HistoryPhotoItem>>(emptyList())
+    val historyFiles: StateFlow<List<HistoryPhotoItem>> = _historyFiles.asStateFlow()
 
     private var framePreviewJob: Job? = null
+    private var bannerJob: Job? = null
 
     init {
         refreshHistoryFiles()
     }
 
     fun showBannerMessage(msg: String) {
-        viewModelScope.launch {
+        bannerJob?.cancel()
+        bannerJob = viewModelScope.launch {
             _statusBannerMessage.value = msg
-            delay(3200)
+            delay(2800)
             if (_statusBannerMessage.value == msg) {
                 _statusBannerMessage.value = null
             }
@@ -118,6 +216,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectTab(tab: AppTab) {
+        if (_currentTab.value == tab) return
         _currentTab.value = tab
         if (tab == AppTab.GALLERY) {
             refreshHistoryFiles()
@@ -130,6 +229,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleDynamicColor(enabled: Boolean) {
         _themeSettings.update { it.copy(useDynamicColor = enabled) }
+    }
+
+    fun updateLiquidGlassConfig(transform: (LiquidGlassConfig) -> LiquidGlassConfig) {
+        _themeSettings.update { current ->
+            val updated = transform(current.liquidGlass)
+            if (updated == current.liquidGlass) current else current.copy(liquidGlass = updated)
+        }
+    }
+
+    fun applyLiquidGlassPreset(preset: LiquidGlassPreset) {
+        _themeSettings.update { current ->
+            current.copy(
+                liquidGlass = LiquidGlassConfig(
+                    enabled = true,
+                    preset = preset,
+                    blurRadiusDp = preset.blurRadiusDp,
+                    refractionStrength = preset.refractionStrength,
+                    dispersionStrength = preset.dispersionStrength,
+                    tintAlpha = preset.tintAlpha,
+                    specularStrength = preset.specularStrength,
+                    cornerRadiusDp = preset.cornerRadiusDp
+                )
+            )
+        }
     }
 
     fun cycleDarkMode(currentlyDark: Boolean) {
@@ -151,6 +274,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val initialTrimEnd = metadata.durationMs
                 val defaultCoverUs = (metadata.durationMs.coerceAtMost(2000L) / 4L) * 1000L
                 val initialCover = motionPhotoBuilder.extractPreviewFrame(uri, defaultCoverUs)
+                val customCoverName = pendingCustomCoverUri?.let { queryFileNameAsync(it) }
 
                 val editingState = StudioState.Editing(
                     videoUri = uri,
@@ -161,7 +285,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     trimEndMs = initialTrimEnd,
                     includeAudio = metadata.hasAudio,
                     customCoverImageUri = pendingCustomCoverUri,
-                    customCoverName = pendingCustomCoverUri?.let { queryFileName(it) },
+                    customCoverName = customCoverName,
                     isLoadingThumbnails = true
                 )
                 _studioState.value = editingState
@@ -263,6 +387,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             current.trimStartMs * 1000L,
             current.trimEndMs * 1000L
         )
+        if (current.coverTimeUs == clampedUs && current.longExposureMode == MotionPhotoBuilder.LongExposureMode.NONE) {
+            return
+        }
         _studioState.value = current.copy(
             coverTimeUs = clampedUs,
             longExposureMode = MotionPhotoBuilder.LongExposureMode.NONE
@@ -276,6 +403,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val validEnd = endMs.coerceIn(validStart + 300L, current.metadata.durationMs)
         val clampedCoverUs = current.coverTimeUs.coerceIn(validStart * 1000L, validEnd * 1000L)
 
+        if (current.trimStartMs == validStart && current.trimEndMs == validEnd && current.coverTimeUs == clampedCoverUs) {
+            return
+        }
         _studioState.value = current.copy(
             trimStartMs = validStart,
             trimEndMs = validEnd,
@@ -285,57 +415,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateIncludeAudio(include: Boolean) {
         val current = _studioState.value as? StudioState.Editing ?: return
+        if (current.includeAudio == include) return
         _studioState.value = current.copy(includeAudio = include)
     }
 
     fun updateJpegQuality(quality: Int) {
         val current = _studioState.value as? StudioState.Editing ?: return
+        if (current.jpegQuality == quality) return
         _studioState.value = current.copy(jpegQuality = quality)
     }
 
     fun updateOutputFormat(format: MotionPhotoBuilder.OutputFormat) {
         val current = _studioState.value as? StudioState.Editing ?: return
+        if (current.selectedFormat == format) return
         _studioState.value = current.copy(selectedFormat = format)
     }
 
     fun setCustomCoverImage(uri: Uri?) {
-        val current = _studioState.value as? StudioState.Editing ?: return
-        val name = uri?.let { queryFileName(it) }
-        _studioState.value = current.copy(
-            customCoverImageUri = uri,
-            customCoverName = name
-        )
-        if (uri != null) {
-            showBannerMessage("已启用图影混流：使用外部高清图 $name 作为实况主图")
+        viewModelScope.launch {
+            val name = uri?.let { queryFileNameAsync(it) }
+            val current = _studioState.value as? StudioState.Editing ?: return@launch
+            _studioState.value = current.copy(
+                customCoverImageUri = uri,
+                customCoverName = name
+            )
+            if (uri != null) {
+                showBannerMessage("已启用图影混流：使用外部高清图 $name 作为实况主图")
+            }
         }
     }
 
     fun setReferenceExifImage(uri: Uri?) {
-        val current = _studioState.value as? StudioState.Editing ?: return
-        val name = uri?.let { queryFileName(it) }
-        _studioState.value = current.copy(
-            referenceExifImageUri = uri,
-            referenceExifName = name
-        )
-        if (uri != null) {
-            showBannerMessage("已载入 EXIF 样张：$name（合成时将自动克隆其相机参数）")
+        viewModelScope.launch {
+            val name = uri?.let { queryFileNameAsync(it) }
+            val current = _studioState.value as? StudioState.Editing ?: return@launch
+            _studioState.value = current.copy(
+                referenceExifImageUri = uri,
+                referenceExifName = name
+            )
+            if (uri != null) {
+                showBannerMessage("已载入 EXIF 样张：$name（合成时将自动克隆其相机参数）")
+            }
         }
     }
 
     fun updateLongExposureMode(mode: MotionPhotoBuilder.LongExposureMode) {
         val current = _studioState.value as? StudioState.Editing ?: return
+        if (current.longExposureMode == mode) return
         _studioState.value = current.copy(longExposureMode = mode)
         refreshCoverPreviewDebounced()
     }
 
     fun updateCoverFilter(filter: MotionPhotoBuilder.CoverFilter) {
         val current = _studioState.value as? StudioState.Editing ?: return
+        if (current.coverFilter == filter) return
         _studioState.value = current.copy(coverFilter = filter)
         refreshCoverPreviewDebounced()
     }
 
     fun updateWatermarkEnabled(enabled: Boolean) {
         val current = _studioState.value as? StudioState.Editing ?: return
+        if (current.watermarkEnabled == enabled) return
         _studioState.value = current.copy(watermarkEnabled = enabled)
     }
 
@@ -343,7 +483,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = _studioState.value as? StudioState.Editing ?: return
         framePreviewJob?.cancel()
         framePreviewJob = viewModelScope.launch {
-            delay(85)
+            delay(45)
             val bitmap = motionPhotoBuilder.extractPreviewFrame(
                 videoUri = current.videoUri,
                 timeUs = current.coverTimeUs,
@@ -502,17 +642,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshHistoryFiles() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val dir = File(getApplication<Application>().getExternalFilesDir(null), "MotionPhotos")
-            val files = dir.listFiles { f ->
+            val dateFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+            val items = dir.listFiles { f ->
                 f.isFile && (f.name.endsWith(".jpg", ignoreCase = true) || f.name.endsWith(".jpeg", ignoreCase = true))
-            }?.sortedByDescending { it.lastModified() } ?: emptyList()
-            _historyFiles.value = files
+            }?.map { f ->
+                val lastMod = f.lastModified()
+                val sizeStr = formatFileSize(f.length())
+                val dateStr = dateFormat.format(Date(lastMod))
+                HistoryPhotoItem(
+                    file = f,
+                    key = f.absolutePath,
+                    name = f.name,
+                    formattedMeta = "$sizeStr · $dateStr",
+                    lastModified = lastMod
+                )
+            }?.sortedByDescending { it.lastModified } ?: emptyList()
+            _historyFiles.value = items
         }
     }
 
     fun deleteHistoryFile(file: File) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 file.delete()
                 refreshHistoryFiles()
@@ -520,8 +672,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun queryFileName(uri: Uri): String {
-        return try {
+    private suspend fun queryFileNameAsync(uri: Uri): String = withContext(Dispatchers.IO) {
+        try {
             getApplication<Application>().contentResolver.query(uri, null, null, null, null)?.use { c ->
                 val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
@@ -529,5 +681,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: Exception) {
             "selected_media"
         }
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        if (bytes <= 0L) return "0 B"
+        val kb = bytes / 1024.0
+        if (kb < 1024.0) return String.format(Locale.US, "%.1f KB", kb)
+        val mb = kb / 1024.0
+        return String.format(Locale.US, "%.2f MB", mb)
     }
 }

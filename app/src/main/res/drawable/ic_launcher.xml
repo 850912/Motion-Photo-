@@ -1,22 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Expressive Squircle Background -->
+    <!-- Smooth Rounded Squircle Base -->
     <path
         android:fillColor="#5B43D6"
-        android:pathData="M0,0h108v108h-108z" />
-    <!-- Expressive Clover / Scallop Accent Shape -->
+        android:pathData="M54,4 C84,4 104,24 104,54 C104,84 84,104 54,104 C24,104 4,84 4,54 C4,24 24,4 54,4 Z" />
+    <!-- Soft Pastel Inner Circle -->
     <path
         android:fillColor="#E5DEFF"
-        android:pathData="M54,18 C64,18 70,24 75,29 C80,34 90,40 90,54 C90,68 80,74 75,79 C70,84 64,90 54,90 C44,90 38,84 33,79 C28,74 18,68 18,54 C18,40 28,34 33,29 C38,24 44,18 54,18 Z" />
-    <!-- Inner Live Motion Ring -->
+        android:pathData="M54,20 A34,34 0 1,1 53.99,20 Z" />
+    <!-- Outer Live Photo Dashed/Rounded Arc Ring -->
+    <path
+        android:strokeColor="#5B43D6"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M54,27 A27,27 0 0,1 77.38,40.5 M81,54 A27,27 0 0,1 67.5,77.38 M54,81 A27,27 0 0,1 30.62,67.5 M27,54 A27,27 0 0,1 40.5,30.62" />
+    <!-- Inner Plump Circle -->
     <path
         android:fillColor="#5B43D6"
-        android:pathData="M54,30 A24,24 0 1,1 53.9,30 Z" />
-    <!-- Play / Live Sparkle Triangle -->
+        android:pathData="M54,33 A21,21 0 1,1 53.99,33 Z" />
+    <!-- Rounded Play Triangle (Chubby & Smooth) -->
     <path
         android:fillColor="#FFD8E4"
-        android:pathData="M46,41 L68,54 L46,67 Z" />
+        android:strokeColor="#FFD8E4"
+        android:strokeWidth="4"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:pathData="M48,44 L64,54 L48,64 Z" />
+    <!-- Live Recording Dot -->
+    <path
+        android:fillColor="#FF8DA6"
+        android:pathData="M75,30 A5.5,5.5 0 1,1 74.99,30 Z" />
 </vector>

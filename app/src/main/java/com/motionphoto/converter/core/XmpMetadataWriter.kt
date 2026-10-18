@@ -2,20 +2,14 @@ package com.motionphoto.converter.core
 
 import com.adobe.internal.xmp.XMPMetaFactory
 import com.adobe.internal.xmp.options.SerializeOptions
+import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
 /**
  * Android Motion Photo 1.0 & 多品牌实况照片 XMP 元数据引擎
- *
- * 修复了旧版本的核心问题：
- * 1. 使用标准 RDF Seq + parseType="Resource" 构建 Container:Directory，避免 setArrayItem 抛出 XMPException 或转义 XML 标签
- * 2. 保留标准 <?xpacket begin="..." id="W5M0MpCehiHzreSzNTczkc9d"?> 包装头尾，确保系统相册与 ExifTool 正常识别
- * 3. 智能解析 JPEG 标记段（SOI / APP0 / APP1 Exif），在保留相机 EXIF 信息的前提下注入 APP1 XMP 数据段
- * 4. 精确写入与静态封面帧对齐的微秒级时间戳 MotionPhotoPresentationTimestampUs
  */
 object XmpMetadataWriter {
 
@@ -26,6 +20,10 @@ object XmpMetadataWriter {
     const val NS_HWCAMERA = "http://www.huawei.com/camera/1.0/"
 
     private const val XMP_HEADER_SIGNATURE = "http://ns.adobe.com/xap/1.0/\u0000"
+    private val XMP_HEADER_BYTES = XMP_HEADER_SIGNATURE.toByteArray(Charsets.UTF_8)
+
+    @Volatile
+    private var namespacesRegistered = false
 
     /**
      * 生成符合指定厂商规范的完整 XMP 数据包（含 xpacket 头尾）
@@ -58,7 +56,7 @@ object XmpMetadataWriter {
         )
 
         return try {
-            registerNamespaces()
+            ensureNamespacesRegistered()
             val xmpMeta = XMPMetaFactory.parseFromString(rawRdfXml)
             val options = SerializeOptions().apply {
                 omitPacketWrapper = false
@@ -88,16 +86,20 @@ object XmpMetadataWriter {
         videoMimeType = videoMimeType
     )
 
-    private fun registerNamespaces() {
-        try {
-            val registry = XMPMetaFactory.getSchemaRegistry()
-            registry.registerNamespace(NS_GCAMERA, "GCamera")
-            registry.registerNamespace(NS_CONTAINER, "Container")
-            registry.registerNamespace(NS_CONTAINER_ITEM, "Item")
-            registry.registerNamespace(NS_OPCAMERA, "OpCamera")
-            registry.registerNamespace(NS_HWCAMERA, "HwCamera")
-        } catch (_: Exception) {
-            // 忽略重复注册异常
+    private fun ensureNamespacesRegistered() {
+        if (namespacesRegistered) return
+        synchronized(this) {
+            if (namespacesRegistered) return
+            try {
+                val registry = XMPMetaFactory.getSchemaRegistry()
+                registry.registerNamespace(NS_GCAMERA, "GCamera")
+                registry.registerNamespace(NS_CONTAINER, "Container")
+                registry.registerNamespace(NS_CONTAINER_ITEM, "Item")
+                registry.registerNamespace(NS_OPCAMERA, "OpCamera")
+                registry.registerNamespace(NS_HWCAMERA, "HwCamera")
+                namespacesRegistered = true
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -203,7 +205,6 @@ object XmpMetadataWriter {
 
         var pos = 2
         var xmpWritten = false
-        val xmpHeaderBytes = XMP_HEADER_SIGNATURE.toByteArray(Charsets.UTF_8)
 
         // 2. 遍历 JPEG 头部标记段，保留 JFIF (FFE0) 和 Exif (FFE1)，并在它们之后插入 XMP (FFE1)
         while (pos + 4 <= inputBytes.size) {
@@ -212,7 +213,7 @@ object XmpMetadataWriter {
             }
             val marker = inputBytes[pos + 1].toInt() and 0xFF
 
-            // 遇到 SOS (0xDA) 或 EOI (0xD9)，说明头部元数据段结束
+            // 遇到 SOS (0xDA) 或 EOI (0xD9)，头部元数据段结束
             if (marker == 0xDA || marker == 0xD9) {
                 if (!xmpWritten) {
                     outBuffer.write(xmpApp1Segment)
@@ -238,7 +239,7 @@ object XmpMetadataWriter {
 
             // 如果是 APP0 (0xE0) 或非 XMP 的 APP1 (0xE1 Exif)，先保留写入
             if (marker == 0xE0 || marker == 0xE1) {
-                val isOldXmp = marker == 0xE1 && isXmpPayload(inputBytes, pos + 4, segLength - 2, xmpHeaderBytes)
+                val isOldXmp = marker == 0xE1 && isXmpPayload(inputBytes, pos + 4, segLength - 2, XMP_HEADER_BYTES)
                 if (!isOldXmp) {
                     outBuffer.write(inputBytes, pos, totalSegBytes)
                 }
@@ -263,7 +264,7 @@ object XmpMetadataWriter {
             outBuffer.write(inputBytes, pos, inputBytes.size - pos)
         }
 
-        FileOutputStream(outputFile).use { out ->
+        BufferedOutputStream(FileOutputStream(outputFile), 64 * 1024).use { out ->
             outBuffer.writeTo(out)
         }
     }
@@ -285,9 +286,8 @@ object XmpMetadataWriter {
      * 构建标准 JPEG APP1 XMP 段：0xFF 0xE1 + [2字节大端长度] + "http://ns.adobe.com/xap/1.0/\0" + XMP UTF-8 内容
      */
     private fun buildXmpApp1Segment(xmpString: String): ByteArray {
-        val headerBytes = XMP_HEADER_SIGNATURE.toByteArray(Charsets.UTF_8)
         val payloadBytes = xmpString.toByteArray(Charsets.UTF_8)
-        val totalPayloadSize = headerBytes.size + payloadBytes.size
+        val totalPayloadSize = XMP_HEADER_BYTES.size + payloadBytes.size
         val segmentLength = totalPayloadSize + 2
 
         if (segmentLength > 65535) {
@@ -299,8 +299,8 @@ object XmpMetadataWriter {
         result[1] = 0xE1.toByte()
         result[2] = ((segmentLength shr 8) and 0xFF).toByte()
         result[3] = (segmentLength and 0xFF).toByte()
-        System.arraycopy(headerBytes, 0, result, 4, headerBytes.size)
-        System.arraycopy(payloadBytes, 0, result, 4 + headerBytes.size, payloadBytes.size)
+        System.arraycopy(XMP_HEADER_BYTES, 0, result, 4, XMP_HEADER_BYTES.size)
+        System.arraycopy(payloadBytes, 0, result, 4 + XMP_HEADER_BYTES.size, payloadBytes.size)
         return result
     }
 }
