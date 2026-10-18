@@ -1,10 +1,17 @@
 package com.motionphoto.converter.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -12,13 +19,16 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -48,14 +58,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesomeMotion
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CameraEnhance
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -68,8 +81,10 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.MusicOff
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PhotoAlbum
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
@@ -98,6 +113,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -108,6 +124,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -115,6 +132,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
@@ -125,6 +143,7 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Precision
+import com.motionphoto.converter.R
 import com.motionphoto.converter.core.MotionPhotoBuilder
 import com.motionphoto.converter.ui.components.AppTab
 import com.motionphoto.converter.ui.components.ExpressiveConnectedButtonGroup
@@ -133,8 +152,12 @@ import com.motionphoto.converter.ui.components.ExpressiveMorphingBadge
 import com.motionphoto.converter.ui.components.ExpressiveWavyCircularHalo
 import com.motionphoto.converter.ui.components.ExpressiveWavyLinearProgress
 import com.motionphoto.converter.ui.components.LiveMotionPhotoPlayerCard
+import com.motionphoto.converter.ui.theme.ExpressiveMotion
 import com.motionphoto.converter.ui.theme.ExpressivePalette
 import com.motionphoto.converter.ui.theme.expressiveBounceClick
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -263,7 +286,6 @@ fun MainScreen(
                 ExpressiveFloatingToolbar(
                     currentTab = currentTab,
                     onSelectTab = viewModel::selectTab,
-                    onQuickPickVideo = launchVideoPicker,
                     liquidGlassConfig = themeSettings.liquidGlass,
                     isDark = isDark,
                     onOpenLiquidGlassTuner = { showLiquidGlassSheet = true }
@@ -277,12 +299,27 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(top = innerPadding.calculateTopPadding())
         ) {
+            // Google M3 Expressive 空间滑入+弹性缩放切换动效
             AnimatedContent(
                 targetState = currentTab,
                 contentKey = { it.name },
                 transitionSpec = {
-                    fadeIn(animationSpec = tween(140)) togetherWith
-                        fadeOut(animationSpec = tween(110))
+                    val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                    (slideInHorizontally(animationSpec = ExpressiveMotion.defaultSpatial()) { fullWidth ->
+                        direction * (fullWidth / 5)
+                    } + scaleIn(
+                        initialScale = 0.93f,
+                        animationSpec = ExpressiveMotion.defaultSpatial()
+                    ) + fadeIn(
+                        animationSpec = ExpressiveMotion.defaultEffects()
+                    )) togetherWith (slideOutHorizontally(animationSpec = ExpressiveMotion.defaultSpatial()) { fullWidth ->
+                        -direction * (fullWidth / 6)
+                    } + scaleOut(
+                        targetScale = 0.94f,
+                        animationSpec = ExpressiveMotion.defaultSpatial()
+                    ) + fadeOut(
+                        animationSpec = ExpressiveMotion.fastEffects()
+                    ))
                 },
                 label = "tab_content_transition"
             ) { tab ->
@@ -333,13 +370,23 @@ fun MainScreen(
                             onPickVideo = launchVideoPicker
                         )
                     }
+
+                    AppTab.ABOUT -> {
+                        AboutAuthorTabContent(
+                            onShowToast = viewModel::showBannerMessage
+                        )
+                    }
                 }
             }
 
             AnimatedVisibility(
                 visible = statusBanner != null,
-                enter = fadeIn(tween(140)) + scaleIn(initialScale = 0.92f, animationSpec = tween(140)),
-                exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.92f, animationSpec = tween(140)),
+                enter = slideInVertically(animationSpec = ExpressiveMotion.fastSpatial()) { -it } +
+                    scaleIn(initialScale = 0.88f, animationSpec = ExpressiveMotion.fastSpatial()) +
+                    fadeIn(animationSpec = ExpressiveMotion.fastEffects()),
+                exit = slideOutVertically(animationSpec = ExpressiveMotion.fastSpatial()) { -it } +
+                    scaleOut(targetScale = 0.88f, animationSpec = ExpressiveMotion.fastSpatial()) +
+                    fadeOut(animationSpec = ExpressiveMotion.fastEffects()),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(horizontal = 20.dp, vertical = 8.dp)
@@ -437,15 +484,27 @@ private fun ExpressiveTopBar(
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
-                Text(
-                    text = when (currentTab) {
-                        AppTab.STUDIO -> "视频转动态照片"
-                        AppTab.INSPECTOR -> "查看信息与提取视频"
-                        AppTab.GALLERY -> "历史记录"
+                AnimatedContent(
+                    targetState = currentTab,
+                    transitionSpec = {
+                        (slideInVertically(animationSpec = ExpressiveMotion.fastSpatial()) { it / 2 } +
+                            fadeIn(animationSpec = ExpressiveMotion.fastEffects())) togetherWith
+                            (slideOutVertically(animationSpec = ExpressiveMotion.fastSpatial()) { -it / 2 } +
+                                fadeOut(animationSpec = ExpressiveMotion.fastEffects()))
                     },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                    label = "topbar_subtitle"
+                ) { tab ->
+                    Text(
+                        text = when (tab) {
+                            AppTab.STUDIO -> "视频转动态照片"
+                            AppTab.INSPECTOR -> "查看信息与提取视频"
+                            AppTab.GALLERY -> "历史记录"
+                            AppTab.ABOUT -> "关于作者与使用指南"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
@@ -516,8 +575,19 @@ private fun StudioTabContent(
         targetState = state,
         contentKey = { it::class.simpleName },
         transitionSpec = {
-            fadeIn(animationSpec = tween(150)) togetherWith
-                fadeOut(animationSpec = tween(120))
+            (scaleIn(
+                initialScale = 0.91f,
+                animationSpec = ExpressiveMotion.defaultSpatial()
+            ) + slideInVertically(
+                animationSpec = ExpressiveMotion.defaultSpatial()
+            ) { it / 8 } + fadeIn(
+                animationSpec = ExpressiveMotion.defaultEffects()
+            )) togetherWith (scaleOut(
+                targetScale = 0.94f,
+                animationSpec = ExpressiveMotion.fastSpatial()
+            ) + fadeOut(
+                animationSpec = ExpressiveMotion.fastEffects()
+            ))
         },
         label = "studio_state_transition"
     ) { current ->
@@ -609,10 +679,10 @@ private fun StudioIdleHeroView(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 ExpressiveMorphingBadge(
-                    modifier = Modifier.size(136.dp),
+                    modifier = Modifier.size(138.dp),
                     lobes = 8f,
-                    waveAmplitude = 0.10f,
-                    isAnimating = false
+                    waveAmplitude = 0.11f,
+                    isAnimating = true
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.MotionPhotosOn,
@@ -647,10 +717,10 @@ private fun StudioIdleHeroView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
-                        .expressiveBounceClick(pressedScale = 0.95f) {
+                        .expressiveBounceClick(pressedScale = 0.94f) {
                             onPickVideo()
                         },
-                    shape = RoundedCornerShape(22.dp),
+                    shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.primary
                 ) {
                     Row(
@@ -680,7 +750,7 @@ private fun StudioIdleHeroView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp)
-                        .expressiveBounceClick(pressedScale = 0.96f) {
+                        .expressiveBounceClick(pressedScale = 0.95f) {
                             onPickBatchVideos()
                         },
                     shape = RoundedCornerShape(26.dp),
@@ -709,7 +779,7 @@ private fun StudioIdleHeroView(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(96.dp))
     }
 }
 
@@ -778,7 +848,6 @@ private fun StudioEditorView(
         }
     }
 
-    // 预缓存时间轴缩略图的 ImageBitmap，避免滑块拖动重组时每帧重复转换 Bitmap -> ImageBitmap
     val timelineImageBitmaps: List<ImageBitmap> = remember(state.timelineThumbnails) {
         state.timelineThumbnails.map { it.asImageBitmap() }
     }
@@ -786,7 +855,6 @@ private fun StudioEditorView(
         state.coverPreviewBitmap?.asImageBitmap()
     }
 
-    // 使用 derivedStateOf 将滑块连续微秒值收敛为离散缩略图索引，大幅降低拖动时的预览重组频率
     val draggedThumbIndex by remember(timelineImageBitmaps.size, state.metadata.durationMs) {
         derivedStateOf {
             if (timelineImageBitmaps.isEmpty()) 0
@@ -1036,7 +1104,7 @@ private fun StudioEditorView(
                 modifier = Modifier
                     .weight(0.68f)
                     .height(56.dp)
-                    .expressiveBounceClick(pressedScale = 0.95f) {
+                    .expressiveBounceClick(pressedScale = 0.94f) {
                         onStartConvert()
                     },
                 shape = RoundedCornerShape(20.dp),
@@ -1061,7 +1129,7 @@ private fun StudioEditorView(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .expressiveBounceClick(pressedScale = 0.98f) {
+                .expressiveBounceClick(pressedScale = 0.96f) {
                     showAdvancedOptions = !showAdvancedOptions
                 },
             shape = RoundedCornerShape(22.dp),
@@ -1107,8 +1175,10 @@ private fun StudioEditorView(
 
         AnimatedVisibility(
             visible = showAdvancedOptions,
-            enter = fadeIn(tween(150)) + expandVertically(tween(170)),
-            exit = fadeOut(tween(120)) + shrinkVertically(tween(140))
+            enter = expandVertically(animationSpec = ExpressiveMotion.defaultSpatial()) +
+                fadeIn(animationSpec = ExpressiveMotion.defaultEffects()),
+            exit = shrinkVertically(animationSpec = ExpressiveMotion.defaultSpatial()) +
+                fadeOut(animationSpec = ExpressiveMotion.fastEffects())
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -1391,7 +1461,7 @@ private fun StudioEditorView(
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(96.dp))
     }
 
     if (showFormatSheet) {
@@ -1475,13 +1545,13 @@ private fun StudioConvertingView(
         verticalArrangement = Arrangement.Center
     ) {
         Box(
-            modifier = Modifier.size(200.dp),
+            modifier = Modifier.size(204.dp),
             contentAlignment = Alignment.Center
         ) {
             ExpressiveMorphingBadge(
-                modifier = Modifier.size(148.dp),
-                lobes = 8f,
-                waveAmplitude = 0.10f,
+                modifier = Modifier.size(150.dp),
+                lobes = 10f,
+                waveAmplitude = 0.12f,
                 isAnimating = true
             ) {
                 Text(
@@ -1646,7 +1716,7 @@ private fun StudioSuccessView(
             Text("继续制作", fontWeight = FontWeight.Bold)
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(96.dp))
     }
 }
 
@@ -1971,7 +2041,13 @@ private fun InspectorTabContent(
                                 Text(if (showRawXmp) "收起 XMP 信息" else "查看 XMP 信息")
                             }
 
-                            AnimatedVisibility(visible = showRawXmp) {
+                            AnimatedVisibility(
+                                visible = showRawXmp,
+                                enter = expandVertically(animationSpec = ExpressiveMotion.defaultSpatial()) +
+                                    fadeIn(animationSpec = ExpressiveMotion.defaultEffects()),
+                                exit = shrinkVertically(animationSpec = ExpressiveMotion.defaultSpatial()) +
+                                    fadeOut(animationSpec = ExpressiveMotion.fastEffects())
+                            ) {
                                 Surface(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -1997,12 +2073,12 @@ private fun InspectorTabContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(96.dp))
     }
 }
 
 /**
- * 作品历史记录页（采用高性能 LazyColumn + 预计算元数据 + 缩略图精确采样，消除滚动掉帧）
+ * 作品历史记录页（采用高性能 LazyColumn + 预计算元数据 + 缩略图精确采样）
  */
 @Composable
 private fun GalleryTabContent(
@@ -2144,8 +2220,340 @@ private fun GalleryTabContent(
         }
 
         item(key = "bottom_spacer", contentType = "spacer") {
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(96.dp))
         }
+    }
+}
+
+/**
+ * Tab 4：关于与使用说明页面
+ * 完整保留原作者信息（黑白君 · 抖音号 heibaijunbenjun · 抖音二维码），并附带实用使用说明
+ */
+@Composable
+private fun AboutAuthorTabContent(
+    onShowToast: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
+    var showZoomQrDialog by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. 原作者信息主卡片（黑白君 · 抖音号 heibaijunbenjun）
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(30.dp),
+            color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Surface(
+                    modifier = Modifier.size(64.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.Person,
+                            contentDescription = "黑白君",
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "黑白君",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                ) {
+                    Text(
+                        text = "抖音号：heibaijunbenjun",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("抖音号", "heibaijunbenjun"))
+                            onShowToast("已复制抖音号：heibaijunbenjun")
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(26.dp)
+                    ) {
+                        Icon(imageVector = Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("复制抖音号", fontWeight = FontWeight.Bold)
+                    }
+
+                    FilledTonalButton(
+                        onClick = {
+                            scope.launch {
+                                val savedPath = saveQrDrawableToGallery(context)
+                                if (savedPath != null) {
+                                    onShowToast("已保存到相册：$savedPath")
+                                } else {
+                                    onShowToast("保存失败，请检查相册权限")
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(26.dp)
+                    ) {
+                        Icon(imageVector = Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("保存二维码", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // 2. 抖音二维码卡片（点击可放大查看）
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .expressiveBounceClick(pressedScale = 0.97f) {
+                    showZoomQrDialog = true
+                },
+            shape = RoundedCornerShape(30.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.50f)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.QrCode2,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "打开抖音扫一扫",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Image(
+                    painter = painterResource(id = R.drawable.douyin_qr_heibaijun),
+                    contentDescription = "黑白君抖音二维码",
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier
+                        .fillMaxWidth(0.86f)
+                        .clip(RoundedCornerShape(24.dp))
+                )
+            }
+        }
+
+        // 3. 使用说明：快速上手与高级功能指南
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesomeMotion,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        text = "使用说明",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+
+                GuideStepItem(
+                    stepNumber = "1",
+                    title = "导入单段或批量视频",
+                    description = "在「创作」页点击「选择视频」导入单段视频进行精细编辑，或点击「批量选择视频」一次勾选多段视频自动批量转换。"
+                )
+
+                GuideStepItem(
+                    stepNumber = "2",
+                    title = "定格封面与片段精修",
+                    description = "滑动「封面位置」选取最清晰的一帧作为静态主图；展开「更多设置」可自由截取起止片段、从相册替换高清封面图、开启慢门/光轨长曝光或叠加滤镜与机型水印。"
+                )
+
+                GuideStepItem(
+                    stepNumber = "3",
+                    title = "各品牌相册兼容与 EXIF 克隆",
+                    description = "默认「通用格式」同时写入 Google、小米 MicroVideo 与 OPPO O-Live 元数据。若部分系统相册校验本机相机参数，可在「更多设置 → 导入相机参数」中任选一张本机相机拍的照片自动克隆机型信息。"
+                )
+
+                GuideStepItem(
+                    stepNumber = "4",
+                    title = "无损提取视频与损坏修复",
+                    description = "在「检验」页导入任意实况照片，可一键无损提取内嵌 MP4 视频、单独导出高清静态图片，或一键修复无法在相册长按播放的实况照片。"
+                )
+            }
+        }
+
+        // 4. 作者与版本信息底卡
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f)
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                MetricRow("作者", "黑白君")
+                MetricRow("抖音号", "heibaijunbenjun")
+                MetricRow("版本", "1.3.0")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(96.dp))
+    }
+
+    if (showZoomQrDialog) {
+        Dialog(onDismissRequest = { showZoomQrDialog = false }) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .expressiveBounceClick { showZoomQrDialog = false },
+                shape = RoundedCornerShape(28.dp),
+                color = Color.Transparent
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.douyin_qr_heibaijun),
+                    contentDescription = "黑白君抖音二维码",
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(28.dp))
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideStepItem(
+    stepNumber: String,
+    title: String,
+    description: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Surface(
+            modifier = Modifier.size(26.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = stepNumber,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private suspend fun saveQrDrawableToGallery(context: Context): String? = withContext(Dispatchers.IO) {
+    try {
+        val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.douyin_qr_heibaijun)
+            ?: return@withContext null
+        val outName = "Douyin_Heibaijun_QR.jpg"
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, outName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/MotionStudio")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: return@withContext null
+        resolver.openOutputStream(uri)?.use { out ->
+            bmp.compress(Bitmap.CompressFormat.JPEG, 95, out)
+        }
+        bmp.recycle()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+            resolver.update(uri, done, null, null)
+        }
+        "Pictures/MotionStudio/$outName"
+    } catch (_: Exception) {
+        null
     }
 }
 
@@ -2317,7 +2725,7 @@ private fun LiquidGlassTunerSheet(
                     fontWeight = FontWeight.ExtraBold
                 )
                 Text(
-                    text = "基于开源 Kyant0/AndroidLiquidGlass 光学折射与色散着色器",
+                    text = "基于开源 Kyant0/AndroidLiquidGlass 光学折射与色散着色器（仅作用于 Dock 底板）",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

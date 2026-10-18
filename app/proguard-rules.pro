@@ -1,5 +1,9 @@
 # ProGuard / R8 rules for Motion Studio v3.0 Release Build
 
+# Keep MainActivity & ViewModel entry points
+-keep class com.motionphoto.converter.MainActivity { *; }
+-keep class com.motionphoto.converter.ui.MainViewModel { *; }
+
 # Keep Adobe XMP Core classes & internal parsers
 -keep class com.adobe.xmp.** { *; }
 -keep class com.adobe.internal.xmp.** { *; }

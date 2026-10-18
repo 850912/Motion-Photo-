@@ -16,34 +16,37 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.graphicsLayer
 
 /**
- * Material 3 Expressive (MD3E) 高响应物理弹簧动效引擎
- * 针对 120Hz 触控响应进行了高刚度与零分配优化（复用静态 SpringSpec 实例，避免重组时重复分配对象）
+ * Google Material 3 Expressive (MD3E) 物理弹簧动效系统
+ * 遵循 M3 Expressive 官方 Spatial & Effects 双轨弹簧规范：
+ * - Spatial 弹簧具备鲜明的弹性回弹 (dampingRatio 0.54 ~ 0.64)，赋予胶囊形变、卡片展开与按压回弹灵动张力
+ * - Effects 弹簧采用无过冲平滑阻尼，用于色彩与透明度过渡
+ * - 静态复用 SpringSpec 实例，兼顾满帧流畅度与表现力
  */
 object ExpressiveMotion {
 
     private val FastSpatialSpec: SpringSpec<Any> = spring(
-        dampingRatio = 0.72f,
-        stiffness = 2200f
+        dampingRatio = 0.55f,
+        stiffness = 620f
     )
 
     private val DefaultSpatialSpec: SpringSpec<Any> = spring(
-        dampingRatio = 0.78f,
-        stiffness = 1100f
+        dampingRatio = 0.60f,
+        stiffness = 380f
     )
 
     private val SlowSpatialSpec: SpringSpec<Any> = spring(
-        dampingRatio = 0.82f,
-        stiffness = 550f
+        dampingRatio = 0.64f,
+        stiffness = 220f
     )
 
     private val FastEffectsSpec: SpringSpec<Any> = spring(
         dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = 3800f
+        stiffness = 1400f
     )
 
     private val DefaultEffectsSpec: SpringSpec<Any> = spring(
         dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = 2000f
+        stiffness = 700f
     )
 
     @Stable
@@ -68,12 +71,12 @@ object ExpressiveMotion {
 }
 
 /**
- * 零重组开销的 GPU 硬件层 (`graphicsLayer`) 按压回弹修饰符
- * 仅在 graphicsLayer 阶段读取 scaleState.value，完全跳过 Composition 与 Layout 阶段
+ * MD3 Expressive 硬件加速按压回弹修饰符
+ * 按下时快速微缩，松手时触发富有弹性的 M3E 物理回弹，仅在 graphicsLayer 阶段更新缩放
  */
 fun Modifier.expressiveBounceClick(
     enabled: Boolean = true,
-    pressedScale: Float = 0.96f,
+    pressedScale: Float = 0.93f,
     onClick: () -> Unit
 ): Modifier = composed {
     val interactionSource = remember { MutableInteractionSource() }

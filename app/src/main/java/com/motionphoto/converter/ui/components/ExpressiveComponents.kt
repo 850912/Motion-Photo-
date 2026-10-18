@@ -9,6 +9,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
@@ -17,8 +18,10 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,17 +39,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.AutoAwesomeMotion
 import androidx.compose.material.icons.rounded.Collections
 import androidx.compose.material.icons.rounded.MotionPhotosOn
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -94,20 +96,18 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * 1. 120Hz 高性能 MD3 Expressive 多叶徽章
- * 优化点：
- * - 使用 drawWithCache 缓存几何 Path 与渐变 Brush，避免每帧重复计算 140+ 次三角函数与分配 Brush
- * - 旋转动画仅在 graphicsLayer 阶段更新 RenderNode 属性，CPU 零重绘开销
+ * 1. Google Material 3 Expressive (MD3E) 灵动多叶徽章 (Cookie / Flower Shape Morphing)
+ * 支持呼吸缩放与平滑花瓣旋转，同时缓存 Path 与 Brush 保证 120Hz 满帧渲染
  */
 @Composable
 fun ExpressiveMorphingBadge(
     modifier: Modifier = Modifier,
     lobes: Float = 8f,
-    waveAmplitude: Float = 0.10f,
-    isAnimating: Boolean = false,
+    waveAmplitude: Float = 0.11f,
+    isAnimating: Boolean = true,
     primaryColor: Color = MaterialTheme.colorScheme.primaryContainer,
     secondaryColor: Color = MaterialTheme.colorScheme.tertiaryContainer,
-    outlineColor: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+    outlineColor: Color = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
     content: @Composable () -> Unit
 ) {
     val animatedLobes by animateFloatAsState(
@@ -116,20 +116,31 @@ fun ExpressiveMorphingBadge(
         label = "lobes"
     )
 
-    val rotationState = if (isAnimating) {
-        val infiniteTransition = rememberInfiniteTransition(label = "badge_spin")
-        infiniteTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 12000, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
+    val infiniteTransition = rememberInfiniteTransition(label = "m3e_badge_motion")
+    val rotationDeg by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = if (isAnimating) 9000 else 24000,
+                easing = LinearEasing
             ),
-            label = "rot"
-        )
-    } else {
-        null
-    }
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "badge_rot"
+    )
+    val breatheScale by infiniteTransition.animateFloat(
+        initialValue = 0.96f,
+        targetValue = 1.04f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = if (isAnimating) 1400 else 2600,
+                easing = FastOutSlowInEasing
+            ),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "badge_breathe"
+    )
 
     val outerPath = remember { Path() }
     val mainPath = remember { Path() }
@@ -142,19 +153,21 @@ fun ExpressiveMorphingBadge(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    rotationZ = rotationState?.value ?: 0f
+                    rotationZ = rotationDeg
+                    scaleX = breatheScale
+                    scaleY = breatheScale
                 }
                 .drawWithCache {
                     val cx = size.width / 2f
                     val cy = size.height / 2f
                     val baseRadius = min(size.width, size.height) * 0.41f
-                    val steps = 64
+                    val steps = 72
                     val lobesVal = animatedLobes
 
                     outerPath.rewind()
                     for (i in 0..steps) {
                         val theta = (i.toFloat() / steps) * (2f * PI.toFloat())
-                        val r = baseRadius * 1.11f * (1f + (waveAmplitude * 0.75f) * cos(lobesVal * theta))
+                        val r = baseRadius * 1.12f * (1f + (waveAmplitude * 0.78f) * cos(lobesVal * theta))
                         val x = cx + r * cos(theta)
                         val y = cy + r * sin(theta)
                         if (i == 0) outerPath.moveTo(x, y) else outerPath.lineTo(x, y)
@@ -171,7 +184,7 @@ fun ExpressiveMorphingBadge(
                     }
                     mainPath.close()
 
-                    val outerFillColor = secondaryColor.copy(alpha = 0.42f)
+                    val outerFillColor = secondaryColor.copy(alpha = 0.45f)
                     val mainBrush = Brush.linearGradient(
                         colors = listOf(primaryColor, secondaryColor),
                         start = Offset.Zero,
@@ -191,7 +204,7 @@ fun ExpressiveMorphingBadge(
 }
 
 /**
- * 2. 零对象分配的 MD3E 波浪进度条 (复用 Path)
+ * 2. MD3 Expressive 波浪进度条
  */
 @Composable
 fun ExpressiveWavyLinearProgress(
@@ -215,7 +228,7 @@ fun ExpressiveWavyLinearProgress(
         initialValue = 0f,
         targetValue = (2f * PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            animation = tween(durationMillis = 1000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "wave_phase"
@@ -242,7 +255,7 @@ fun ExpressiveWavyLinearProgress(
         if (animatedProgress > 0.01f) {
             wavePath.rewind()
             var x = startX
-            val step = 6f
+            val step = 5f
             var first = true
             while (x <= activeEndX) {
                 val angle = ((x - startX) / waveLenPx) * (2f * PI.toFloat()) - wavePhase
@@ -277,7 +290,7 @@ fun ExpressiveWavyLinearProgress(
 }
 
 /**
- * 3. 零分配环形波浪光环 (缓存背景轨道 Path)
+ * 3. MD3 Expressive 动态环形波浪光环
  */
 @Composable
 fun ExpressiveWavyCircularHalo(
@@ -292,6 +305,17 @@ fun ExpressiveWavyCircularHalo(
         animationSpec = ExpressiveMotion.defaultSpatial(),
         label = "circular_wavy_progress"
     )
+    val infiniteTransition = rememberInfiniteTransition(label = "halo_wave_phase")
+    val phaseShift by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2f * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "halo_phase"
+    )
+
     val bgPath = remember { Path() }
     val fgPath = remember { Path() }
 
@@ -301,15 +325,15 @@ fun ExpressiveWavyCircularHalo(
             val cx = size.width / 2f
             val cy = size.height / 2f
             val baseRadius = (min(size.width, size.height) / 2f) - strokePx * 1.8f
-            val waveAmp = strokePx * 0.45f
+            val waveAmp = strokePx * 0.48f
             val frequency = 12f
-            val steps = 84
+            val steps = 90
 
             bgPath.rewind()
             for (i in 0..steps) {
                 val ratio = i.toFloat() / steps
                 val theta = -PI.toFloat() / 2f + ratio * 2f * PI.toFloat()
-                val r = baseRadius + (waveAmp * 0.4f) * sin(frequency * theta)
+                val r = baseRadius + (waveAmp * 0.38f) * sin(frequency * theta)
                 val x = cx + r * cos(theta)
                 val y = cy + r * sin(theta)
                 if (i == 0) bgPath.moveTo(x, y) else bgPath.lineTo(x, y)
@@ -323,11 +347,12 @@ fun ExpressiveWavyCircularHalo(
                 drawPath(path = bgPath, color = trackColor, style = bgStroke)
 
                 val activeSteps = (steps * animatedProgressState.value).toInt().coerceAtLeast(2)
+                val currentPhase = phaseShift
                 fgPath.rewind()
                 for (i in 0..activeSteps) {
                     val ratio = i.toFloat() / steps
                     val theta = -PI.toFloat() / 2f + ratio * 2f * PI.toFloat()
-                    val r = baseRadius + waveAmp * sin(frequency * theta)
+                    val r = baseRadius + waveAmp * sin(frequency * theta - currentPhase)
                     val x = cx + r * cos(theta)
                     val y = cy + r * sin(theta)
                     if (i == 0) fgPath.moveTo(x, y) else fgPath.lineTo(x, y)
@@ -339,7 +364,8 @@ fun ExpressiveWavyCircularHalo(
 }
 
 /**
- * 4. 高响应连通形变按钮组 (Connected Button Group)
+ * 4. Google M3 Expressive 连通形变按钮组 (Connected Button Group)
+ * 选中项动态拉伸宽度权重 + 圆角从方枕形弹跳过渡为胶囊圆角
  */
 @Composable
 fun <T> ExpressiveConnectedButtonGroup(
@@ -359,32 +385,45 @@ fun <T> ExpressiveConnectedButtonGroup(
             val isFirst = index == 0
             val isLast = index == items.lastIndex
 
+            val itemWeight by animateFloatAsState(
+                targetValue = if (isSelected) 1.28f else 1f,
+                animationSpec = ExpressiveMotion.fastSpatial(),
+                label = "btn_weight"
+            )
             val startRadius by animateDpAsState(
-                targetValue = if (isSelected || isFirst) 22.dp else 8.dp,
+                targetValue = if (isSelected || isFirst) 24.dp else 10.dp,
                 animationSpec = ExpressiveMotion.fastSpatial(),
                 label = "sr"
             )
             val endRadius by animateDpAsState(
-                targetValue = if (isSelected || isLast) 22.dp else 8.dp,
+                targetValue = if (isSelected || isLast) 24.dp else 10.dp,
                 animationSpec = ExpressiveMotion.fastSpatial(),
                 label = "er"
             )
 
-            val containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-            }
-            val contentColor = if (isSelected) {
-                MaterialTheme.colorScheme.onPrimary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            }
+            val containerColor by animateColorAsState(
+                targetValue = if (isSelected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+                },
+                animationSpec = ExpressiveMotion.fastEffects(),
+                label = "btn_bg"
+            )
+            val contentColor by animateColorAsState(
+                targetValue = if (isSelected) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                animationSpec = ExpressiveMotion.fastEffects(),
+                label = "btn_fg"
+            )
 
             Box(
                 modifier = Modifier
-                    .weight(if (isSelected) 1.18f else 1f)
-                    .height(44.dp)
+                    .weight(itemWeight)
+                    .height(46.dp)
                     .clip(
                         RoundedCornerShape(
                             topStart = startRadius,
@@ -393,8 +432,10 @@ fun <T> ExpressiveConnectedButtonGroup(
                             bottomEnd = endRadius
                         )
                     )
-                    .background(containerColor)
-                    .expressiveBounceClick(pressedScale = 0.95f) {
+                    .drawBehind {
+                        drawRect(color = containerColor)
+                    }
+                    .expressiveBounceClick(pressedScale = 0.92f) {
                         onSelect(item)
                     }
                     .padding(horizontal = 8.dp),
@@ -413,7 +454,7 @@ fun <T> ExpressiveConnectedButtonGroup(
 }
 
 /**
- * 5. 底部悬浮胶囊导航栏（已精简为「创作」「检验」「作品」三大核心页面）
+ * 5. 底部悬浮胶囊导航栏（包含「创作」「检验」「作品」「关于」四大页面）
  */
 enum class AppTab(
     val title: String,
@@ -421,7 +462,8 @@ enum class AppTab(
 ) {
     STUDIO("创作", Icons.Rounded.AutoAwesomeMotion),
     INSPECTOR("检验", Icons.Rounded.Verified),
-    GALLERY("作品", Icons.Rounded.Collections);
+    GALLERY("作品", Icons.Rounded.Collections),
+    ABOUT("关于", Icons.Rounded.Person);
 
     companion object {
         val Entries: List<AppTab> = values().toList()
@@ -430,6 +472,7 @@ enum class AppTab(
 
 /**
  * 开源项目 Kyant0/AndroidLiquidGlass (Apache-2.0) 光学折射与色散着色器 (AGSL)
+ * 仅作用于 Dock 栏底板背景层，绝不模糊或扭曲前景导航图标与文字
  */
 private const val KYANT_LIQUID_GLASS_AGSL = """
     uniform shader content;
@@ -479,11 +522,17 @@ private const val KYANT_LIQUID_GLASS_AGSL = """
     }
 """
 
+/**
+ * 独立的 Dock 栏液态玻璃底板层修饰符
+ * 仅对 Dock 栏背景胶囊本身应用光学透镜折射、模糊、菲涅尔高光与色散光圈，
+ * 前景的导航文字、图标与选中胶囊位于上层独立图层，保持 100% 清晰锐利。
+ */
 @Composable
-fun Modifier.kyantLiquidGlass(
+fun Modifier.kyantLiquidGlassDockBackdrop(
     config: MainViewModel.LiquidGlassConfig,
     surfaceColor: Color,
     primaryColor: Color,
+    secondaryColor: Color,
     isDark: Boolean
 ): Modifier {
     val density = LocalDensity.current
@@ -498,7 +547,6 @@ fun Modifier.kyantLiquidGlass(
             .background(surfaceColor.copy(alpha = 0.96f))
     }
 
-    // 复用 RuntimeShader 实例，避免在 graphicsLayer 中重复编译 AGSL 着色器导致掉帧
     val cachedRuntimeShader = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
@@ -513,19 +561,72 @@ fun Modifier.kyantLiquidGlass(
 
     val baseFrostAlpha = config.tintAlpha.coerceIn(0.05f, 0.88f)
     val glassBaseColor = if (isDark) {
-        Color(0xFF1E1E28).copy(alpha = baseFrostAlpha)
+        Color(0xFF1E1E2A).copy(alpha = (baseFrostAlpha + 0.18f).coerceAtMost(0.92f))
     } else {
-        Color(0xFFFFFFFF).copy(alpha = (baseFrostAlpha + 0.12f).coerceAtMost(0.90f))
+        Color(0xFFFFFFFF).copy(alpha = (baseFrostAlpha + 0.22f).coerceAtMost(0.94f))
     }
 
     return this
         .shadow(
-            elevation = (10f + config.specularStrength * 10f).dp,
+            elevation = (10f + config.specularStrength * 12f).dp,
             shape = shape,
-            spotColor = primaryColor.copy(alpha = 0.28f),
-            ambientColor = primaryColor.copy(alpha = 0.16f)
+            spotColor = primaryColor.copy(alpha = 0.30f),
+            ambientColor = primaryColor.copy(alpha = 0.18f)
         )
         .clip(shape)
+        // 1. 仅在背景层内部应用 AGSL 光学折射与毛玻璃模糊，然后再在前景绘制清晰锐利的高光边框
+        .drawWithCache {
+            val cr = CornerRadius(cornerRadiusPx, cornerRadiusPx)
+            val rimAlpha = (0.30f + config.specularStrength * 0.65f).coerceIn(0f, 1f)
+            val dispAlpha = (config.dispersionStrength * 0.60f).coerceIn(0f, 0.85f)
+
+            val topHighlightBrush = Brush.linearGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = rimAlpha),
+                    primaryColor.copy(alpha = dispAlpha * 0.70f),
+                    Color.White.copy(alpha = rimAlpha * 0.25f),
+                    Color(0xFF70D6FF).copy(alpha = dispAlpha * 0.60f),
+                    Color.White.copy(alpha = rimAlpha * 0.75f)
+                ),
+                start = Offset.Zero,
+                end = Offset(size.width, size.height)
+            )
+
+            val innerLensBrush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = (0.22f + config.refractionStrength * 0.30f).coerceAtMost(0.62f)),
+                    glassBaseColor,
+                    primaryColor.copy(alpha = (0.08f + config.dispersionStrength * 0.18f).coerceAtMost(0.32f))
+                )
+            )
+
+            val causticGlowBrush = Brush.radialGradient(
+                colors = listOf(
+                    primaryColor.copy(alpha = 0.18f * config.refractionStrength),
+                    secondaryColor.copy(alpha = 0.12f * config.dispersionStrength),
+                    Color.Transparent
+                ),
+                center = Offset(size.width * 0.28f, size.height * 0.25f),
+                radius = size.width * 0.75f
+            )
+
+            val topSpecularBrush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.28f * config.specularStrength),
+                    Color.Transparent
+                ),
+                startY = 0f,
+                endY = size.height * 0.52f
+            )
+            val rimStroke = Stroke(width = (1.3f + config.specularStrength * 1.1f).dp.toPx())
+
+            onDrawBehind {
+                drawRoundRect(brush = innerLensBrush, cornerRadius = cr)
+                drawRoundRect(brush = causticGlowBrush, cornerRadius = cr)
+                drawRoundRect(brush = topSpecularBrush, cornerRadius = cr)
+                drawRoundRect(brush = topHighlightBrush, cornerRadius = cr, style = rimStroke)
+            }
+        }
         .graphicsLayer {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && cachedRuntimeShader != null) {
                 try {
@@ -548,8 +649,8 @@ fun Modifier.kyantLiquidGlass(
                     val shaderEffect = RenderEffect.createRuntimeShaderEffect(cachedRuntimeShader, "content")
                     renderEffect = if (blurPx > 0.5f) {
                         val blurEffect = RenderEffect.createBlurEffect(
-                            blurPx * 0.35f,
-                            blurPx * 0.35f,
+                            blurPx * 0.28f,
+                            blurPx * 0.28f,
                             Shader.TileMode.CLAMP
                         )
                         RenderEffect.createChainEffect(shaderEffect, blurEffect).asComposeRenderEffect()
@@ -560,200 +661,181 @@ fun Modifier.kyantLiquidGlass(
                 }
             }
         }
-        .drawWithCache {
-            val cr = CornerRadius(cornerRadiusPx, cornerRadiusPx)
-            val rimAlpha = (0.25f + config.specularStrength * 0.65f).coerceIn(0f, 1f)
-            val dispAlpha = (config.dispersionStrength * 0.55f).coerceIn(0f, 0.8f)
-
-            val topHighlightBrush = Brush.linearGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = rimAlpha),
-                    primaryColor.copy(alpha = dispAlpha * 0.65f),
-                    Color.White.copy(alpha = rimAlpha * 0.20f),
-                    Color(0xFF70D6FF).copy(alpha = dispAlpha * 0.55f),
-                    Color.White.copy(alpha = rimAlpha * 0.70f)
-                ),
-                start = Offset.Zero,
-                end = Offset(size.width, size.height)
-            )
-
-            val innerLensBrush = Brush.verticalGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = (0.18f + config.refractionStrength * 0.28f).coerceAtMost(0.55f)),
-                    glassBaseColor,
-                    primaryColor.copy(alpha = (0.06f + config.dispersionStrength * 0.14f).coerceAtMost(0.28f))
-                )
-            )
-
-            // 在 drawWithCache 阶段缓存顶部高光渐变与边框 Stroke，避免 onDrawWithContent 每帧分配
-            val topSpecularBrush = Brush.verticalGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.22f * config.specularStrength),
-                    Color.Transparent
-                ),
-                startY = 0f,
-                endY = size.height * 0.48f
-            )
-            val rimStroke = Stroke(width = (1.2f + config.specularStrength * 1.1f).dp.toPx())
-
-            onDrawWithContent {
-                drawRoundRect(brush = innerLensBrush, cornerRadius = cr)
-                drawRoundRect(brush = topSpecularBrush, cornerRadius = cr)
-                drawContent()
-                drawRoundRect(brush = topHighlightBrush, cornerRadius = cr, style = rimStroke)
-            }
-        }
 }
 
+/**
+ * 底部悬浮液态玻璃 Dock 栏：
+ * - 已移除右下角多余的添加图片按钮
+ * - 液态玻璃折射/模糊仅作用于底层 `kyantLiquidGlassDockBackdrop`，上层文字与图标 100% 清晰锐利
+ * - 采用 Google M3 Expressive 弹簧形变（选中项弹性拉伸、圆角方枕→胶囊形变、图标微弹跳与标签丝滑展开）
+ */
 @Composable
 fun ExpressiveFloatingToolbar(
     currentTab: AppTab,
     onSelectTab: (AppTab) -> Unit,
-    onQuickPickVideo: () -> Unit,
     liquidGlassConfig: MainViewModel.LiquidGlassConfig = MainViewModel.LiquidGlassConfig(),
     isDark: Boolean = false,
     onOpenLiquidGlassTuner: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val pillCornerShape = remember(liquidGlassConfig.cornerRadiusDp) {
-        RoundedCornerShape(liquidGlassConfig.cornerRadiusDp.dp)
-    }
-
-    Row(
+    Box(
         modifier = modifier
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 10.dp)
+            .height(66.dp)
     ) {
+        // 图层 1：独立的液态玻璃光学背景层（仅对 Dock 栏自身底板生效，不影响上层文字和图标）
         Box(
             modifier = Modifier
-                .weight(1f)
-                .height(64.dp)
-                .kyantLiquidGlass(
+                .matchParentSize()
+                .kyantLiquidGlassDockBackdrop(
                     config = liquidGlassConfig,
                     surfaceColor = MaterialTheme.colorScheme.surface,
                     primaryColor = MaterialTheme.colorScheme.primary,
+                    secondaryColor = MaterialTheme.colorScheme.tertiary,
                     isDark = isDark
                 )
+        )
+
+        // 图层 2：前景高清导航内容层（文字与图标不经过 RenderEffect 模糊或色散，保持锐利）
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AppTab.Entries.forEach { tab ->
-                    val selected = tab == currentTab
-                    val activeAlpha = if (liquidGlassConfig.enabled) {
-                        (0.55f + liquidGlassConfig.tintAlpha * 0.35f).coerceIn(0.45f, 0.92f)
-                    } else 1f
-                    val pillColorState = animateColorAsState(
-                        targetValue = if (selected) {
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = activeAlpha)
-                        } else {
-                            Color.Transparent
-                        },
-                        animationSpec = ExpressiveMotion.fastEffects(),
-                        label = "tab_pill_bg"
-                    )
-                    val contentColor = if (selected) {
+            AppTab.Entries.forEach { tab ->
+                val selected = tab == currentTab
+
+                val tabWeight by animateFloatAsState(
+                    targetValue = if (selected) 1.48f else 1f,
+                    animationSpec = ExpressiveMotion.fastSpatial(),
+                    label = "tab_weight"
+                )
+                val pillCorner by animateDpAsState(
+                    targetValue = if (selected) 26.dp else 16.dp,
+                    animationSpec = ExpressiveMotion.fastSpatial(),
+                    label = "tab_corner"
+                )
+                val iconScale by animateFloatAsState(
+                    targetValue = if (selected) 1.12f else 1f,
+                    animationSpec = ExpressiveMotion.fastSpatial(),
+                    label = "tab_icon_scale"
+                )
+
+                val activeAlpha = if (liquidGlassConfig.enabled) {
+                    (0.72f + liquidGlassConfig.tintAlpha * 0.22f).coerceIn(0.65f, 0.95f)
+                } else 1f
+
+                val pillColor by animateColorAsState(
+                    targetValue = if (selected) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = activeAlpha)
+                    } else {
+                        Color.Transparent
+                    },
+                    animationSpec = ExpressiveMotion.fastEffects(),
+                    label = "tab_pill_bg"
+                )
+                val contentColor by animateColorAsState(
+                    targetValue = if (selected) {
                         MaterialTheme.colorScheme.onPrimaryContainer
                     } else {
-                        MaterialTheme.colorScheme.onSurface
-                    }
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    animationSpec = ExpressiveMotion.fastEffects(),
+                    label = "tab_content_fg"
+                )
 
-                    Row(
-                        modifier = Modifier
-                            .weight(if (selected) 1.28f else 1f)
-                            .height(50.dp)
-                            .clip(pillCornerShape)
-                            .drawBehind {
-                                drawRect(color = pillColorState.value)
-                            }
-                            .then(
-                                if (selected && liquidGlassConfig.enabled) {
-                                    Modifier.border(
-                                        width = 1.dp,
-                                        brush = Brush.linearGradient(
-                                            listOf(
-                                                Color.White.copy(alpha = 0.65f * liquidGlassConfig.specularStrength),
-                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                                            )
-                                        ),
-                                        shape = pillCornerShape
-                                    )
-                                } else Modifier
-                            )
-                            .expressiveBounceClick(pressedScale = 0.94f) {
-                                onSelectTab(tab)
-                            }
-                            .padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.title,
-                            tint = contentColor,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = tab.title,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                            color = contentColor,
-                            maxLines = 1
-                        )
-                    }
-                }
+                val itemShape = RoundedCornerShape(pillCorner)
 
-                // 液态玻璃实时自由调节入口按钮
-                Box(
+                Row(
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(
-                            MaterialTheme.colorScheme.secondaryContainer.copy(
-                                alpha = if (liquidGlassConfig.enabled) 0.65f else 0.9f
-                            )
+                        .weight(tabWeight)
+                        .height(52.dp)
+                        .clip(itemShape)
+                        .drawBehind {
+                            drawRect(color = pillColor)
+                        }
+                        .then(
+                            if (selected && liquidGlassConfig.enabled) {
+                                Modifier.border(
+                                    width = 1.dp,
+                                    brush = Brush.linearGradient(
+                                        listOf(
+                                            Color.White.copy(alpha = 0.70f * liquidGlassConfig.specularStrength),
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)
+                                        )
+                                    ),
+                                    shape = itemShape
+                                )
+                            } else Modifier
                         )
-                        .expressiveBounceClick(pressedScale = 0.90f) {
-                            onOpenLiquidGlassTuner()
-                        },
-                    contentAlignment = Alignment.Center
+                        .expressiveBounceClick(pressedScale = 0.91f) {
+                            onSelectTab(tab)
+                        }
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Tune,
-                        contentDescription = "调节液态玻璃",
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.size(19.dp)
+                        imageVector = tab.icon,
+                        contentDescription = tab.title,
+                        tint = contentColor,
+                        modifier = Modifier
+                            .size(21.dp)
+                            .graphicsLayer {
+                                scaleX = iconScale
+                                scaleY = iconScale
+                            }
                     )
+                    AnimatedVisibility(
+                        visible = selected,
+                        enter = fadeIn(animationSpec = ExpressiveMotion.fastEffects()) +
+                            expandHorizontally(
+                                animationSpec = ExpressiveMotion.fastSpatial(),
+                                expandFrom = Alignment.Start
+                            ),
+                        exit = fadeOut(animationSpec = ExpressiveMotion.fastEffects()) +
+                            shrinkHorizontally(
+                                animationSpec = ExpressiveMotion.fastSpatial(),
+                                shrinkTowards = Alignment.Start
+                            )
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = tab.title,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = contentColor,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
             }
-        }
 
-        Surface(
-            modifier = Modifier
-                .size(64.dp)
-                .shadow(
-                    elevation = 12.dp,
-                    shape = RoundedCornerShape(22.dp),
-                    spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                )
-                .expressiveBounceClick(pressedScale = 0.92f) {
-                    onQuickPickVideo()
-                },
-            shape = RoundedCornerShape(22.dp),
-            color = MaterialTheme.colorScheme.primary
-        ) {
-            Box(contentAlignment = Alignment.Center) {
+            // 液态玻璃实时自由调节入口按钮
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(
+                        MaterialTheme.colorScheme.secondaryContainer.copy(
+                            alpha = if (liquidGlassConfig.enabled) 0.78f else 0.92f
+                        )
+                    )
+                    .expressiveBounceClick(pressedScale = 0.88f) {
+                        onOpenLiquidGlassTuner()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
-                    imageVector = Icons.Rounded.AddPhotoAlternate,
-                    contentDescription = "选择视频",
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(26.dp)
+                    imageVector = Icons.Rounded.Tune,
+                    contentDescription = "调节液态玻璃",
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(19.dp)
                 )
             }
         }
@@ -762,7 +844,6 @@ fun ExpressiveFloatingToolbar(
 
 /**
  * 6. 按需加载 (Lazy ExoPlayer) 的实况照片交互预览卡
- * 默认仅显示静态图片，仅当点击播放实况时才创建 ExoPlayer，避免进入页面时主线程解码卡顿
  */
 @Composable
 fun LiveMotionPhotoPlayerCard(
@@ -804,7 +885,7 @@ fun LiveMotionPhotoPlayerCard(
     }
 
     val cornerRadius by animateDpAsState(
-        targetValue = if (isPlayingLive) 22.dp else 30.dp,
+        targetValue = if (isPlayingLive) 20.dp else 32.dp,
         animationSpec = ExpressiveMotion.defaultSpatial(),
         label = "live_photo_corner"
     )
@@ -831,7 +912,7 @@ fun LiveMotionPhotoPlayerCard(
                 },
                 shape = RoundedCornerShape(cornerRadius)
             )
-            .expressiveBounceClick(pressedScale = 0.98f) {
+            .expressiveBounceClick(pressedScale = 0.97f) {
                 if (videoFileOrUri != null) {
                     isPlayingLive = !isPlayingLive
                 }
@@ -846,8 +927,8 @@ fun LiveMotionPhotoPlayerCard(
 
         AnimatedVisibility(
             visible = isPlayingLive && exoPlayer != null,
-            enter = fadeIn(animationSpec = tween(150)),
-            exit = fadeOut(animationSpec = tween(150)),
+            enter = fadeIn(animationSpec = ExpressiveMotion.defaultEffects()),
+            exit = fadeOut(animationSpec = ExpressiveMotion.fastEffects()),
             modifier = Modifier.fillMaxSize()
         ) {
             if (exoPlayer != null) {
@@ -873,11 +954,15 @@ fun LiveMotionPhotoPlayerCard(
             }
         }
 
-        val badgeBg = if (isPlayingLive) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            Color.Black.copy(alpha = 0.62f)
-        }
+        val badgeBg by animateColorAsState(
+            targetValue = if (isPlayingLive) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                Color.Black.copy(alpha = 0.62f)
+            },
+            animationSpec = ExpressiveMotion.fastEffects(),
+            label = "live_badge_bg"
+        )
         val badgeFg = if (isPlayingLive) {
             MaterialTheme.colorScheme.onPrimary
         } else {
